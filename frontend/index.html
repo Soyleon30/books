@@ -278,6 +278,7 @@
   </div>
 
   <div id="p2" class="pane hide">
+    <p id="lib-user-hint" class="hide" style="font-size:12px;color:var(--muted);margin:0 0 10px">普通用户可自建 <b>1</b> 个图书馆（自动归属您的群组）。可对自己创建的馆改名。</p>
     <input id="n" type="text" placeholder="新图书馆名称">
     <input id="d" type="text" placeholder="备注">
     <div id="lib-vis-box" class="hide">
@@ -302,10 +303,12 @@
   </div>
 
   <div id="p4" class="pane hide">
-    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">管理员管理群组：成员、归属馆</p>
-    <input id="gn" type="text" placeholder="新群组名称">
-    <input id="gd" type="text" placeholder="备注">
-    <button type="button" class="btn btn-main" onclick="createGroup()">创建群组</button>
+    <p id="group-hint" style="font-size:13px;color:var(--muted);margin:0 0 10px">群组</p>
+    <div id="group-create-box">
+      <input id="gn" type="text" placeholder="新群组名称">
+      <input id="gd" type="text" placeholder="备注">
+      <button type="button" class="btn btn-main" onclick="createGroup()">创建群组</button>
+    </div>
     <div id="groups" style="margin-top:14px"></div>
   </div>
 
@@ -587,8 +590,16 @@
         if (libVis) libVis.classList.remove('hide');
       } else {
         if (t5) t5.classList.add('hide');
-        t4.classList.add('hide');
+        if (t4) t4.classList.remove('hide');
         if (libVis) libVis.classList.add('hide');
+      }
+      const libHint = document.getElementById('lib-user-hint');
+      if (libHint) libHint.classList.toggle('hide', !!(isAdmin() || isViewer()));
+      const gh = document.getElementById('group-hint');
+      if (gh) {
+        gh.textContent = isAdmin()
+          ? '管理员：成员、归属馆、改名/删除'
+          : '可自建 1 个群组（自动加入）；可对自己创建的群组改名';
       }
     }
   }
@@ -637,20 +648,81 @@
     );
   }
 
+
+  function isMineGroup(g) {
+    return !!(me && g && Number(g.created_by) === Number(me.id));
+  }
+  function isMineLib(l) {
+    return !!(me && l && Number(l.created_by) === Number(me.id));
+  }
+
+  async function renameGroup(g) {
+    if (!isAdmin() && !isMineGroup(g)) return toast('只能改自己创建的群组', true);
+    const name = prompt('群组名称', g.name || '');
+    if (name == null) return;
+    const n = String(name).trim();
+    if (!n) return toast('名称不能为空', true);
+    const description = prompt('备注（可空）', g.description || '');
+    if (description == null) return;
+    try {
+      await api('/groups/' + g.id, {
+        method: 'PUT',
+        body: JSON.stringify({ name: n, description: String(description).trim() }),
+      });
+      toast('已改名');
+      loadGroups();
+    } catch (e) {
+      toast(e.message, true);
+    }
+  }
+
+  async function renameLib(l) {
+    if (!isAdmin() && !isMineLib(l)) return toast('只能改自己创建的馆', true);
+    const name = prompt('图书馆名称', l.name || '');
+    if (name == null) return;
+    const n = String(name).trim();
+    if (!n) return toast('名称不能为空', true);
+    const description = prompt('备注（可空）', l.description || '');
+    if (description == null) return;
+    try {
+      await api('/libraries/' + l.id, {
+        method: 'PUT',
+        body: JSON.stringify({ name: n, description: String(description).trim() }),
+      });
+      toast('已改名');
+      loadLibs();
+    } catch (e) {
+      toast(e.message, true);
+    }
+  }
+
   function renderGroupsAdmin() {
     const box = document.getElementById('groups');
-    if (!box || !isAdmin()) return;
+    if (!box) return;
+    if (!canWrite()) {
+      box.innerHTML = '<div class="muted">只读账号无群组管理</div>';
+      return;
+    }
+    const createBox = document.getElementById('group-create-box');
+    if (createBox && !isAdmin()) {
+      const mine = (allGroups || []).filter(isMineGroup);
+      createBox.classList.toggle('hide', mine.length >= 1);
+    }
     if (!allGroups.length) {
-      box.innerHTML = '<div class="muted">暂无群组</div>';
+      box.innerHTML =
+        '<div class="muted">暂无群组' + (canWrite() && !isAdmin() ? '，可在上方创建一个' : '') + '</div>';
       return;
     }
     box.innerHTML = '';
     allGroups.forEach((g) => {
       const div = document.createElement('div');
       div.className = 'card';
+      const mine = isMineGroup(g);
+      const canRen = isAdmin() || mine;
       div.innerHTML =
         '<div style="flex:1"><b>' +
         esc(g.name) +
+        (mine ? ' ·我创建' : '') +
         '</b><div style="font-size:12px;color:var(--muted)">' +
         (g.library_count || 0) +
         ' 馆 · ' +
@@ -659,27 +731,42 @@
         esc(g.description || '') +
         '</div></div>' +
         '<div style="display:flex;flex-direction:column;gap:6px;font-size:12px">' +
-        '<button type="button" data-a="mem" style="border:0;background:0;color:var(--primary)">成员</button>' +
-        '<button type="button" data-a="libs" style="border:0;background:0;color:var(--accent-2)">归属馆</button>' +
-        '<button type="button" data-a="del" style="border:0;background:0;color:var(--err-text)">删除</button></div>';
-      div.querySelector('[data-a=mem]').onclick = () => editGroupMembers(g);
-      div.querySelector('[data-a=libs]').onclick = () => editGroupLibraries(g);
-      div.querySelector('[data-a=del]').onclick = async () => {
-        if (!confirm('删除群组「' + g.name + '」？')) return;
-        try {
-          await api('/groups/' + g.id, { method: 'DELETE' });
-          toast('已删除');
-          loadGroups();
-        } catch (e) {
-          toast(e.message, true);
+        (canRen
+          ? '<button type="button" data-a="ren" style="border:0;background:0;color:var(--primary)">改名</button>'
+          : '') +
+        (isAdmin()
+          ? '<button type="button" data-a="mem" style="border:0;background:0;color:var(--primary)">成员</button>' +
+            '<button type="button" data-a="libs" style="border:0;background:0;color:var(--accent-2)">归属馆</button>' +
+            '<button type="button" data-a="del" style="border:0;background:0;color:var(--err-text)">删除</button>'
+          : '') +
+        '</div>';
+      const rb = div.querySelector('[data-a=ren]');
+      if (rb) rb.onclick = () => renameGroup(g);
+      if (isAdmin()) {
+        const mb = div.querySelector('[data-a=mem]');
+        if (mb) mb.onclick = () => editGroupMembers(g);
+        const lb = div.querySelector('[data-a=libs]');
+        if (lb) lb.onclick = () => editGroupLibraries(g);
+        const db = div.querySelector('[data-a=del]');
+        if (db) {
+          db.onclick = async () => {
+            if (!confirm('删除群组「' + g.name + '」？')) return;
+            try {
+              await api('/groups/' + g.id, { method: 'DELETE' });
+              toast('已删除');
+              loadGroups();
+            } catch (e) {
+              toast(e.message, true);
+            }
+          };
         }
-      };
+      }
       box.appendChild(div);
     });
   }
 
   async function createGroup() {
-    if (!isAdmin()) return;
+    if (!canWrite()) return toast('无权限', true);
     const name = document.getElementById('gn').value.trim();
     const description = document.getElementById('gd').value.trim();
     if (!name) return toast('填群组名', true);
@@ -687,7 +774,7 @@
       await api('/groups', { method: 'POST', body: JSON.stringify({ name, description }) });
       document.getElementById('gn').value = '';
       document.getElementById('gd').value = '';
-      toast('群组已创建');
+      toast(isAdmin() ? '群组已创建' : '群组已创建，您已自动加入');
       loadGroups();
     } catch (e) {
       toast(e.message, true);
@@ -1068,7 +1155,7 @@
       fillSel();
       renderLibs();
       L('API ok libs=' + libs.length);
-      if (isAdmin()) loadGroups();
+      if (canWrite()) loadGroups();
     } catch (e) {
       st('API失败: ' + e.message, 'err');
       toast(e.message, true);
@@ -1231,6 +1318,9 @@
         '</div></div>' +
         '<div style="display:flex;flex-direction:column;gap:6px;font-size:12px">' +
         '<button type="button" data-a="use" style="border:0;background:0;color:var(--primary)">选用</button>' +
+        (isAdmin() || isMineLib(l)
+          ? '<button type="button" data-a="ren" style="border:0;background:0;color:var(--primary)">改名</button>'
+          : '') +
         (isAdmin()
           ? '<button type="button" data-a="vis" style="border:0;background:0;color:var(--accent-2)">可见性</button>'
           : '') +
@@ -1248,6 +1338,8 @@
         renderLibs();
         toast('已切换');
       };
+      const rb = div.querySelector('[data-a=ren]');
+      if (rb) rb.onclick = () => renameLib(l);
       const vb = div.querySelector('[data-a=vis]');
       if (vb) vb.onclick = () => editLibVisibility(l);
       const mb = div.querySelector('[data-a=mig]');
@@ -1293,7 +1385,7 @@
       localStorage.setItem(LS, String(libId));
       document.getElementById('n').value = '';
       document.getElementById('d').value = '';
-      toast('已创建');
+      toast(isAdmin() ? '已创建' : '已创建，已归属您的群组');
       await loadLibs();
     } catch (e) {
       toast(e.message, true);
@@ -1882,7 +1974,7 @@
   function showTab(n) {
     // 账号页(3)所有人可进改密；用户管理仅 admin 可见区块
     if (isViewer() && (n === 0 || n === 2 || n === 4)) n = 1;
-    if (!isAdmin() && (n === 4 || n === 5)) n = 1;
+    if (!isAdmin() && n === 5) n = 1;
     document.getElementById('p0').classList.toggle('hide', n !== 0);
     document.getElementById('p1').classList.toggle('hide', n !== 1);
     document.getElementById('p2').classList.toggle('hide', n !== 2);
@@ -2056,6 +2148,8 @@
   window.createUser = createUser;
   window.fromFilesBatch = fromFilesBatch;
   window.createGroup = createGroup;
+  window.renameGroup = renameGroup;
+  window.renameLib = renameLib;
   window.editGroupLibraries = editGroupLibraries;
   window.onLibVisChange = onLibVisChange;
 

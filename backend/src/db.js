@@ -199,6 +199,19 @@ async function initDb() {
     `);
 
 
+
+    if (!(await columnExists(conn, 'org_groups', 'created_by'))) {
+      try {
+        await conn.query(`ALTER TABLE org_groups ADD COLUMN created_by BIGINT UNSIGNED NULL`);
+        await conn.query(`ALTER TABLE org_groups ADD KEY idx_og_creator (created_by)`);
+      } catch (_) {}
+    }
+    if (!(await columnExists(conn, 'libraries', 'created_by'))) {
+      try {
+        await conn.query(`ALTER TABLE libraries ADD COLUMN created_by BIGINT UNSIGNED NULL`);
+        await conn.query(`ALTER TABLE libraries ADD KEY idx_lib_creator (created_by)`);
+      } catch (_) {}
+    }
     if (!(await columnExists(conn, 'users', 'theme'))) {
       await conn.query(
         `ALTER TABLE users ADD COLUMN theme VARCHAR(32) NOT NULL DEFAULT 'sage'`
