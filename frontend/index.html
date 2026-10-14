@@ -302,7 +302,7 @@
   </div>
 
   <div id="p4" class="pane hide">
-    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">管理员管理群组与成员</p>
+    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">管理员管理群组：成员、归属馆</p>
     <input id="gn" type="text" placeholder="新群组名称">
     <input id="gd" type="text" placeholder="备注">
     <button type="button" class="btn btn-main" onclick="createGroup()">创建群组</button>
@@ -660,8 +660,10 @@
         '</div></div>' +
         '<div style="display:flex;flex-direction:column;gap:6px;font-size:12px">' +
         '<button type="button" data-a="mem" style="border:0;background:0;color:var(--primary)">成员</button>' +
+        '<button type="button" data-a="libs" style="border:0;background:0;color:var(--accent-2)">归属馆</button>' +
         '<button type="button" data-a="del" style="border:0;background:0;color:var(--err-text)">删除</button></div>';
       div.querySelector('[data-a=mem]').onclick = () => editGroupMembers(g);
+      div.querySelector('[data-a=libs]').onclick = () => editGroupLibraries(g);
       div.querySelector('[data-a=del]').onclick = async () => {
         if (!confirm('删除群组「' + g.name + '」？')) return;
         try {
@@ -687,6 +689,73 @@
       document.getElementById('gd').value = '';
       toast('群组已创建');
       loadGroups();
+    } catch (e) {
+      toast(e.message, true);
+    }
+  }
+
+
+  async function editGroupLibraries(g) {
+    if (!isAdmin()) return;
+    try {
+      const d = await api('/groups/' + g.id + '/libraries');
+      const list = d.libraries || [];
+      const body = document.getElementById('dlg-body');
+      const ok = document.getElementById('dlg-ok');
+      body.innerHTML =
+        '<p style="margin:0 0 6px;font-weight:600">归属馆 · ' +
+        esc(g.name) +
+        '</p>' +
+        '<p style="margin:0 0 10px;font-size:12px;color:var(--muted)">勾选后该馆归属本群组（仅所属群组可见时成员可看）。取消勾选会解除归属，不删馆。</p>' +
+        '<div id="dlg-libs" style="max-height:50vh;overflow:auto;text-align:left">' +
+        (list.length
+          ? list
+              .map((l) => {
+                const vis =
+                  l.visibility === 'public'
+                    ? '全员'
+                    : l.visibility === 'custom'
+                      ? '多群'
+                      : '本群';
+                return (
+                  '<label style="display:flex;align-items:center;gap:8px;padding:8px 4px;border-bottom:1px solid var(--bg);font-size:14px">' +
+                  '<input type="checkbox" data-lid="' +
+                  l.id +
+                  '"' +
+                  (l.assigned ? ' checked' : '') +
+                  '>' +
+                  '<span style="flex:1"><b>' +
+                  esc(l.name) +
+                  '</b> <span style="color:var(--muted);font-size:12px">' +
+                  (l.book_count || 0) +
+                  '本 · ' +
+                  vis +
+                  '</span></span></label>'
+                );
+              })
+              .join('')
+          : '<div class="muted">暂无图书馆，请先在「馆」页创建</div>') +
+        '</div>';
+      ok.classList.remove('hide');
+      ok.textContent = '保存归属';
+      ok.onclick = async () => {
+        const ids = [...document.querySelectorAll('#dlg-libs input[data-lid]:checked')].map((el) =>
+          Number(el.getAttribute('data-lid'))
+        );
+        try {
+          const r = await api('/groups/' + g.id + '/libraries', {
+            method: 'PUT',
+            body: JSON.stringify({ library_ids: ids }),
+          });
+          closeDlg();
+          toast('已归属 ' + (r.assigned || ids.length) + ' 馆');
+          loadGroups();
+          loadLibs();
+        } catch (e) {
+          toast(e.message, true);
+        }
+      };
+      document.getElementById('dlg').classList.remove('hide');
     } catch (e) {
       toast(e.message, true);
     }
@@ -1987,6 +2056,7 @@
   window.createUser = createUser;
   window.fromFilesBatch = fromFilesBatch;
   window.createGroup = createGroup;
+  window.editGroupLibraries = editGroupLibraries;
   window.onLibVisChange = onLibVisChange;
 
   /* theme boot */

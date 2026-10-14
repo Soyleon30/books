@@ -631,6 +631,114 @@ app.put('/api/groups/:id/members', adminRequired, async (req, res) => {
   }
 });
 
+
+app.get('/api/groups/:id/libraries', adminRequired, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: '无效群组ID' });
+  try {
+    const [g] = await pool.query(`SELECT id, name FROM org_groups WHERE id=? LIMIT 1`, [id]);
+    if (!g[0]) return res.status(404).json({ error: '群组不存在' });
+    const [rows] = await pool.query(
+      `SELECT l.id, l.name, l.visibility, l.owner_group_id, l.group_id,
+              (l.owner_group_id = ? OR l.group_id = ?) AS assigned,
+              (SELECT COUNT(*) FROM books b WHERE b.library_id=l.id) AS book_count
+       FROM libraries l
+       ORDER BY l.id ASC`,
+      [id, id]
+    );
+    res.json({
+      group: g[0],
+      libraries: rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        visibility: r.visibility,
+        owner_group_id: r.owner_group_id,
+        group_id: r.group_id,
+        book_count: Number(r.book_count || 0),
+        assigned: !!(r.assigned === 1 || r.assigned === true || Number(r.assigned) === 1),
+      })),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * 设置「归属本群组」的图书馆列表（owner_group_id / group_id）
+ * - 勾选的馆：归属本群；visibility=group 时同步 library_groups
+ * - 取消勾选且原归属本群的馆：owner/group 清空（不删馆）
+ * 仅管理员
+ */
+app.put('/api/groups/:id/libraries', adminRequired, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: '无效群组ID' });
+  const libraryIds = Array.isArray(req.body.library_ids)
+    ? [...new Set(req.body.library_ids.map(Number).filter((n) => n > 0))]
+    : [];
+  try {
+    const [g] = await pool.query(`SELECT id, name FROM org_groups WHERE id=? LIMIT 1`, [id]);
+    if (!g[0]) return res.status(404).json({ error: '群组不存在' });
+
+    const [allLibs] = await pool.query(
+      `SELECT id, owner_group_id, group_id, visibility FROM libraries`
+    );
+    const want = new Set(libraryIds);
+    let assigned = 0;
+    let cleared = 0;
+
+    for (const lib of allLibs) {
+      const was =
+        Number(lib.owner_group_id) === id || Number(lib.group_id) === id;
+      const now = want.has(Number(lib.id));
+      if (now) {
+        await pool.query(
+          `UPDATE libraries SET owner_group_id=?, group_id=? WHERE id=?`,
+          [id, id, lib.id]
+        );
+        const vis = lib.visibility || 'group';
+        if (vis === 'group') {
+          await setLibraryVisibleGroups(lib.id, [id]);
+        } else if (vis === 'custom') {
+          // 保证本群在可见列表中
+          const cur = await getLibraryVisibleGroupIds(lib.id);
+          if (!cur.includes(id)) {
+            await setLibraryVisibleGroups(lib.id, [...cur, id]);
+          }
+        }
+        assigned += 1;
+      } else if (was) {
+        await pool.query(
+          `UPDATE libraries SET owner_group_id=NULL, group_id=NULL WHERE id=?`,
+          [lib.id]
+        );
+        // 从 library_groups 去掉本群
+        await pool.query(
+          `DELETE FROM library_groups WHERE library_id=? AND group_id=?`,
+          [lib.id, id]
+        );
+        cleared += 1;
+      }
+    }
+
+    await writeAudit(req, {
+      action: 'group_libraries',
+      target_type: 'group',
+      target_id: id,
+      detail: { library_ids: libraryIds, assigned, cleared },
+    });
+    res.json({
+      message: '归属馆已更新',
+      group_id: id,
+      library_ids: libraryIds,
+      assigned,
+      cleared,
+    });
+  } catch (e) {
+    console.error('[group libraries]', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ---------- libraries ----------
 app.get('/api/libraries', async (req, res) => {
   try {
