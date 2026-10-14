@@ -44,7 +44,7 @@ async function destroyUserSessions(userId) {
 async function getUserByToken(token) {
   if (!token) return null;
   const [rows] = await pool.query(
-    `SELECT u.id, u.username, u.display_name, u.role, u.status, u.created_at, s.expires_at
+    `SELECT u.id, u.username, u.display_name, u.role, u.status, u.theme, u.created_at, s.expires_at
      FROM sessions s
      JOIN users u ON u.id = s.user_id
      WHERE s.token = ? LIMIT 1`,
@@ -63,6 +63,7 @@ async function getUserByToken(token) {
     display_name: row.display_name,
     role: row.role,
     status: row.status,
+    theme: row.theme || 'sage',
     created_at: row.created_at,
   };
 }

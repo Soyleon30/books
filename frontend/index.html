@@ -326,7 +326,7 @@
     
     <div style="margin-bottom:18px;padding-bottom:16px;border-bottom:1px solid var(--line)">
       <p style="font-size:14px;font-weight:600;margin:0 0 10px">界面配色</p>
-      <p style="font-size:12px;color:var(--muted);margin:0 0 10px">纯色搭配，无渐变。选择后保存在本机。</p>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 10px">纯色搭配，无渐变。选择后保存到当前账号，换设备登录仍有效。</p>
       <div id="theme-grid" class="theme-grid"></div>
     </div>
 <div style="margin-bottom:16px">
@@ -381,11 +381,32 @@
     { id: 'lilac', name: '暮紫', desc: '柔和紫灰', colors: ['#f3f0f5','#6b5b7a','#857399','#ebe6f0'] },
   ];
 
-  function applyTheme(id) {
+  function applyTheme(id, opts) {
+    const silent = opts && opts.silent;
     const t = THEMES.find((x) => x.id === id) || THEMES[0];
     document.documentElement.setAttribute('data-theme', t.id);
     try { localStorage.setItem(LS_THEME, t.id); } catch (_) {}
+    if (me) me.theme = t.id;
     renderThemePicker();
+    return t;
+  }
+
+  async function saveTheme(id) {
+    const t = applyTheme(id);
+    if (!token || !me) {
+      toast('已切换：' + t.name + '（登录后将跟随账号）');
+      return;
+    }
+    try {
+      const d = await api('/auth/preferences', {
+        method: 'PUT',
+        body: JSON.stringify({ theme: t.id }),
+      });
+      if (d.user) me = d.user;
+      toast('已保存到账号：' + t.name);
+    } catch (e) {
+      toast(e.message || '保存失败', true);
+    }
   }
 
   function currentThemeId() {
@@ -420,8 +441,7 @@
     }).join('');
     box.querySelectorAll('[data-theme-id]').forEach((el) => {
       el.onclick = () => {
-        applyTheme(el.getAttribute('data-theme-id'));
-        toast('已切换：' + (THEMES.find((x) => x.id === el.getAttribute('data-theme-id')) || {}).name);
+        saveTheme(el.getAttribute('data-theme-id'));
       };
     });
   }
@@ -510,6 +530,11 @@
     stop();
   }
 
+  function themeFromUser(u) {
+    if (u && u.theme) applyTheme(u.theme, { silent: true });
+    else applyTheme(currentThemeId(), { silent: true });
+  }
+
   function showApp() {
     document.getElementById('login-page').classList.add('hide');
     document.getElementById('app-page').classList.remove('hide');
@@ -519,6 +544,7 @@
         me.role === 'admin' ? '管理员' : me.role === 'viewer' ? '只读' : '用户';
       who.textContent = (me.display_name || me.username) + ' · ' + roleLabel;
     }
+    themeFromUser(me);
     applyRoleUi();
   }
 
@@ -1949,6 +1975,7 @@
   window.createLib = createLib;
   window.loadAuditLogs = loadAuditLogs;
   window.applyTheme = applyTheme;
+  window.saveTheme = saveTheme;
   window.migrateDefaultLib = migrateDefaultLib;
   window.createDefaultLib = createDefaultLib;
   window.onLib = onLib;

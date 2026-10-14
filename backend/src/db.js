@@ -199,6 +199,12 @@ async function initDb() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
 
+
+    if (!(await columnExists(conn, 'users', 'theme'))) {
+      await conn.query(
+        `ALTER TABLE users ADD COLUMN theme VARCHAR(32) NOT NULL DEFAULT 'sage'`
+      );
+    }
     await conn.query(`
       CREATE TABLE IF NOT EXISTS sessions (
         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,

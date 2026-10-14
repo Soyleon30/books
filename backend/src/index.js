@@ -172,9 +172,16 @@ function publicUser(row) {
     display_name: row.display_name,
     role: row.role,
     status: row.status,
+    theme: row.theme || 'sage',
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
+}
+
+function normalizeTheme(raw) {
+  const t = String(raw || 'sage').trim().toLowerCase();
+  const ok = ["sage","mist","clay","ink","pine","lilac"];
+  return ok.includes(t) ? t : 'sage';
 }
 
 app.get('/api/health', async (_req, res) => {
@@ -206,7 +213,7 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     const [rows] = await pool.query(
-      `SELECT id, username, password_hash, display_name, role, status, created_at
+      `SELECT id, username, password_hash, display_name, role, status, theme, created_at
        FROM users WHERE username = ? LIMIT 1`,
       [username]
     );
@@ -305,11 +312,32 @@ app.post('/api/auth/change-password', async (req, res) => {
   }
 });
 
+
+app.put('/api/auth/preferences', async (req, res) => {
+  const theme = normalizeTheme(req.body.theme);
+  try {
+    await pool.query(`UPDATE users SET theme = ? WHERE id = ?`, [theme, req.user.id]);
+    const [rows] = await pool.query(
+      `SELECT id, username, display_name, role, status, theme, created_at, updated_at FROM users WHERE id=? LIMIT 1`,
+      [req.user.id]
+    );
+    await writeAudit(req, {
+      action: 'prefs_theme',
+      target_type: 'user',
+      target_id: req.user.id,
+      detail: { theme },
+    });
+    res.json({ message: '已保存', user: publicUser(rows[0]) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ---------- users (admin only, no self-register) ----------
 app.get('/api/users', adminRequired, async (_req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT id, username, display_name, role, status, created_at, updated_at
+      `SELECT id, username, display_name, role, status, theme, created_at, updated_at
        FROM users ORDER BY id ASC`
     );
     const users = [];
@@ -364,7 +392,8 @@ app.post('/api/users', adminRequired, async (req, res) => {
       await ensureUserInDefaultGroup(r.insertId);
     }
     const [rows] = await pool.query(
-      `SELECT id, username, display_name, role, status, created_at, updated_at FROM users WHERE id=?`,
+      `SELECT id, username, display_name, role, status, theme, created_at, updated_at
+       FROM users WHERE id=?`,
       [r.insertId]
     );
     await writeAudit(req, { action: 'user_create', target_type: 'user', target_id: r.insertId, detail: { username, role } });
@@ -432,7 +461,8 @@ app.put('/api/users/:id', adminRequired, async (req, res) => {
       await destroyUserSessions(id);
     }
     const [updated] = await pool.query(
-      `SELECT id, username, display_name, role, status, created_at, updated_at FROM users WHERE id=?`,
+      `SELECT id, username, display_name, role, status, theme, created_at, updated_at
+       FROM users WHERE id=?`,
       [id]
     );
     const [gids] = await pool.query(
