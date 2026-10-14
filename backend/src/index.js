@@ -524,12 +524,17 @@ app.get('/api/groups', async (req, res) => {
 });
 
 app.post('/api/groups', writeRequired, async (req, res) => {
+  // writeRequired 已排除 viewer；此处再明确：仅 admin / user
+  if (req.user.role === 'viewer') {
+    return res.status(403).json({ error: '只读账号不能创建群组' });
+  }
   const name = String(req.body.name || '').trim();
   const description = String(req.body.description || '').trim() || null;
   if (!name) return res.status(400).json({ error: '群组名称不能为空' });
   if (name.length > 128) return res.status(400).json({ error: '名称过长' });
   try {
-    if (req.user.role !== 'admin') {
+    // 仅普通 user 限 1 个；admin 不限
+    if (req.user.role === 'user') {
       const [owned] = await pool.query(
         `SELECT COUNT(*) AS c FROM org_groups WHERE created_by=?`,
         [req.user.id]
@@ -846,7 +851,10 @@ app.post('/api/libraries', writeRequired, async (req, res) => {
 
   try {
     const userGids = await getUserGroupIds(req.user);
-    if (req.user.role !== 'admin') {
+    if (req.user.role === 'viewer') {
+      return res.status(403).json({ error: '只读账号不能创建图书馆' });
+    }
+    if (req.user.role === 'user') {
       const [ownedLibs] = await pool.query(
         `SELECT COUNT(*) AS c FROM libraries WHERE created_by=?`,
         [req.user.id]

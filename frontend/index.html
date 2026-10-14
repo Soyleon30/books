@@ -823,6 +823,7 @@
   }
 
   async function createGroup() {
+    if (isViewer()) return toast('只读账号不能创建群组', true);
     if (!canWrite()) return toast('无权限', true);
     const name = document.getElementById('gn').value.trim();
     const description = document.getElementById('gd').value.trim();
@@ -1416,6 +1417,7 @@
   }
 
   async function createLib() {
+    if (isViewer()) return toast('只读账号不能创建图书馆', true);
     if (!canWrite()) return toast('只读账号无此权限', true);
     const name = document.getElementById('n').value.trim();
     const description = document.getElementById('d').value.trim();
