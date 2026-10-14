@@ -123,6 +123,10 @@ function buildStackServices(appRow) {
       container_name: s.container_name,
       host_port: Number(s.host_port),
       container_port: Number(s.container_port),
+      // 源码 build 必需；旧 stack_json 可能缺这些字段
+      context: s.context || (s.key === 'api' ? 'backend' : s.key === 'web' ? 'frontend' : '.'),
+      dockerfile: s.dockerfile || 'Dockerfile',
+      env_keys: Array.isArray(s.env_keys) ? s.env_keys : undefined,
       env: svcEnv,
     };
   });

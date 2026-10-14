@@ -47,7 +47,7 @@ CREATE DATABASE IF NOT EXISTS lite_paas DEFAULT CHARSET utf8mb4;
 2. 打开面板 → 新建应用或选已有应用
 3. 上传 tar → 填环境变量 → 部署
 
-books 示例产物：`book-scanner-images.tar`（api+web），按面板「书本扫描器」预置或自建应用上传即可。
+books 示例产物：`book-scanner-images.tar`（api+web），按面板「图书管理」预置或自建应用上传即可。
 
 ## API
 

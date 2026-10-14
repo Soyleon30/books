@@ -27,15 +27,28 @@ function defaultBookScannerStack() {
       {
         key: 'api',
         name: 'API',
+        context: 'backend',
+        dockerfile: 'Dockerfile',
         image: 'book-scanner-api:latest',
         container_name: 'book-scanner-api',
         host_port: 3000,
         container_port: 3000,
-        env_keys: ['MYSQL_HOST', 'MYSQL_PORT', 'MYSQL_USER', 'MYSQL_PASSWORD', 'MYSQL_DATABASE', 'PORT'],
+        env_keys: [
+          'MYSQL_HOST',
+          'MYSQL_PORT',
+          'MYSQL_USER',
+          'MYSQL_PASSWORD',
+          'MYSQL_DATABASE',
+          'PORT',
+          'ADMIN_USERNAME',
+          'ADMIN_PASSWORD',
+        ],
       },
       {
         key: 'web',
-        name: '前端',
+        name: 'Web',
+        context: 'frontend',
+        dockerfile: 'Dockerfile',
         image: 'book-scanner-web:latest',
         container_name: 'book-scanner-web',
         host_port: 8080,
@@ -132,7 +145,7 @@ async function initDb() {
         `INSERT INTO apps (name, slug, description, image_name, container_name, host_port, container_port, env_json, deploy_mode, stack_json, status)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
-          '书本扫描器',
+          '图书管理',
           'book-scanner',
           '整栈：前端 8080 + API 3000（上传 books-source_*.zip，服务器自动 build）',
           'book-scanner-web',
@@ -178,10 +191,25 @@ async function initDb() {
           envObj.MYSQL_HOST === '8.157.18.157' ||
           envObj.MYSQL_HOST === '127.0.0.1' ||
           envObj.MYSQL_HOST === 'localhost';
+        let stackObj = null;
+        try {
+          stackObj =
+            typeof old[0].stack_json === 'object' && old[0].stack_json
+              ? old[0].stack_json
+              : JSON.parse(old[0].stack_json || 'null');
+        } catch (_) {
+          stackObj = null;
+        }
+        const stackSvcs = (stackObj && stackObj.services) || [];
+        const stackMissingContext =
+          !stackSvcs.length ||
+          stackSvcs.some((s) => !s.context && (s.key === 'api' || s.key === 'web'));
+
         const needStack =
           !old[0].deploy_mode ||
           old[0].deploy_mode === 'single' ||
-          !old[0].stack_json;
+          !old[0].stack_json ||
+          stackMissingContext;
 
         if (needStack || needEnv) {
           const merged = needEnv ? { ...defaultEnv, ...envObj, ...defaultEnv } : envObj;

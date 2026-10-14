@@ -23,13 +23,69 @@ async function columnExists(conn, table, column) {
 async function initDb() {
   const conn = await pool.getConnection();
   try {
+    // MySQL 保留字 groups → 使用 org_groups；旧库若已有 groups 则改名
+    try {
+      const [t] = await conn.query(
+        `SELECT TABLE_NAME AS n FROM information_schema.TABLES
+         WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('groups','org_groups')`
+      );
+      const names = t.map((x) => x.n);
+      if (names.includes('groups') && !names.includes('org_groups')) {
+        await conn.query('RENAME TABLE `groups` TO org_groups');
+      }
+    } catch (_) {}
+
     await conn.query(`
-      CREATE TABLE IF NOT EXISTS libraries (
+      CREATE TABLE IF NOT EXISTS org_groups (
         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
         name VARCHAR(128) NOT NULL,
         description VARCHAR(512) DEFAULT NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE KEY uk_name (name)
+        UNIQUE KEY uk_group_name (name)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS libraries (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        group_id BIGINT UNSIGNED NULL,
+        owner_group_id BIGINT UNSIGNED NULL,
+        visibility VARCHAR(16) NOT NULL DEFAULT 'group',
+        name VARCHAR(128) NOT NULL,
+        description VARCHAR(512) DEFAULT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_name (name),
+        KEY idx_lib_group (group_id),
+        KEY idx_lib_owner_group (owner_group_id),
+        KEY idx_lib_vis (visibility)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    if (!(await columnExists(conn, 'libraries', 'group_id'))) {
+      await conn.query(`ALTER TABLE libraries ADD COLUMN group_id BIGINT UNSIGNED NULL`);
+      await conn.query(`ALTER TABLE libraries ADD KEY idx_lib_group (group_id)`);
+    }
+    if (!(await columnExists(conn, 'libraries', 'owner_group_id'))) {
+      await conn.query(`ALTER TABLE libraries ADD COLUMN owner_group_id BIGINT UNSIGNED NULL`);
+      await conn.query(`ALTER TABLE libraries ADD KEY idx_lib_owner_group (owner_group_id)`);
+    }
+    if (!(await columnExists(conn, 'libraries', 'visibility'))) {
+      await conn.query(
+        `ALTER TABLE libraries ADD COLUMN visibility VARCHAR(16) NOT NULL DEFAULT 'group'`
+      );
+      await conn.query(`ALTER TABLE libraries ADD KEY idx_lib_vis (visibility)`);
+    }
+
+    // 图书馆 ↔ 群组 可见性（custom 时用；public 全员；group 用 owner_group_id）
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS library_groups (
+        library_id BIGINT UNSIGNED NOT NULL,
+        group_id BIGINT UNSIGNED NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (library_id, group_id),
+        KEY idx_lg_group (group_id),
+        CONSTRAINT fk_lg_lib FOREIGN KEY (library_id) REFERENCES libraries(id) ON DELETE CASCADE,
+        CONSTRAINT fk_lg_group FOREIGN KEY (group_id) REFERENCES org_groups(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
 
@@ -50,7 +106,6 @@ async function initDb() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
 
-    // 兼容旧表：若已有 books 且无 library_id，则迁移
     const hasLibraryId = await columnExists(conn, 'books', 'library_id');
     if (!hasLibraryId) {
       const [libs] = await conn.query(
@@ -82,6 +137,123 @@ async function initDb() {
     if (countRows[0].c === 0) {
       await conn.query(
         `INSERT INTO libraries (name, description) VALUES ('默认图书馆', '系统自动创建')`
+      );
+    }
+
+    // 默认群组 + 挂上无 group 的馆
+    const [gCount] = await conn.query(`SELECT COUNT(*) AS c FROM org_groups`);
+    let defaultGroupId = null;
+    if (gCount[0].c === 0) {
+      const [g] = await conn.query(
+        `INSERT INTO org_groups (name, description) VALUES ('默认群组', '系统自动创建')`
+      );
+      defaultGroupId = g.insertId;
+    } else {
+      const [g] = await conn.query(`SELECT id FROM org_groups ORDER BY id ASC LIMIT 1`);
+      defaultGroupId = g[0].id;
+    }
+    // 迁移：旧馆无 owner/visibility 时，归默认群组私有
+    await conn.query(
+      `UPDATE libraries SET owner_group_id = COALESCE(owner_group_id, group_id, ?)
+       WHERE owner_group_id IS NULL`,
+      [defaultGroupId]
+    );
+    await conn.query(
+      `UPDATE libraries SET group_id = COALESCE(group_id, owner_group_id) WHERE group_id IS NULL`
+    );
+    await conn.query(
+      `UPDATE libraries SET visibility='group' WHERE visibility IS NULL OR visibility=''`
+    );
+    // 同步 library_groups：group 可见性写入一行
+    await conn.query(`
+      INSERT IGNORE INTO library_groups (library_id, group_id)
+      SELECT id, owner_group_id FROM libraries
+      WHERE visibility='group' AND owner_group_id IS NOT NULL
+    `);
+
+    try {
+      await conn.query(`
+        ALTER TABLE libraries
+        ADD CONSTRAINT fk_lib_group FOREIGN KEY (group_id) REFERENCES org_groups(id) ON DELETE SET NULL
+      `);
+    } catch (_) {}
+    try {
+      await conn.query(`
+        ALTER TABLE libraries
+        ADD CONSTRAINT fk_lib_owner_group FOREIGN KEY (owner_group_id) REFERENCES org_groups(id) ON DELETE SET NULL
+      `);
+    } catch (_) {}
+
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        username VARCHAR(64) NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        display_name VARCHAR(128) DEFAULT NULL,
+        role VARCHAR(16) NOT NULL DEFAULT 'user',
+        status VARCHAR(16) NOT NULL DEFAULT 'active',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_username (username),
+        KEY idx_role (role)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        token VARCHAR(128) NOT NULL,
+        user_id BIGINT UNSIGNED NOT NULL,
+        expires_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_token (token),
+        KEY idx_user (user_id),
+        KEY idx_exp (expires_at),
+        CONSTRAINT fk_sess_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS group_members (
+        group_id BIGINT UNSIGNED NOT NULL,
+        user_id BIGINT UNSIGNED NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (group_id, user_id),
+        KEY idx_gm_user (user_id),
+        CONSTRAINT fk_gm_group FOREIGN KEY (group_id) REFERENCES org_groups(id) ON DELETE CASCADE,
+        CONSTRAINT fk_gm_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        user_id BIGINT UNSIGNED NULL,
+        username VARCHAR(64) NULL,
+        role VARCHAR(16) NULL,
+        action VARCHAR(64) NOT NULL,
+        target_type VARCHAR(32) NULL,
+        target_id VARCHAR(64) NULL,
+        detail TEXT NULL,
+        ip VARCHAR(64) NULL,
+        user_agent VARCHAR(512) NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_audit_created (created_at),
+        KEY idx_audit_user (user_id),
+        KEY idx_audit_action (action)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    // 已有用户若无群组，加入默认群组
+    const [orphans] = await conn.query(
+      `SELECT u.id FROM users u
+       LEFT JOIN group_members gm ON gm.user_id = u.id
+       WHERE gm.user_id IS NULL`
+    );
+    for (const o of orphans) {
+      await conn.query(
+        `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`,
+        [defaultGroupId, o.id]
       );
     }
   } finally {

@@ -566,28 +566,67 @@ async function deployFromSource({
   const sourceRoot = resolveSourceRoot(extractDir);
   appendLog(log, `源码根目录: ${sourceRoot}`);
 
-  let svcList = services || [];
+  let svcList = (services || []).map((s) => ({ ...s }));
   let net = network;
   const meta = readPaasJson(sourceRoot);
   if (meta) {
-    appendLog(log, `读取 paas.json: ${meta.name || meta.slug || 'ok'}`);
+    appendLog(log, `读取 paas.json: ${meta.name || meta.slug || 'ok'} v${meta.version || '-'}`);
     if (meta.network) net = meta.network;
     if (meta.services && meta.services.length) {
-      // 合并：paas.json 提供 context/dockerfile/image/ports；调用方 services 可覆盖 env
-      const envByKey = {};
+      // paas.json 优先提供 context/dockerfile/image/ports；调用方可覆盖 env/ports
+      const byKey = {};
       for (const s of svcList) {
-        if (s.key) envByKey[s.key] = s.env || {};
+        if (s.key) byKey[s.key] = s;
       }
-      svcList = meta.services.map((s) => ({
-        ...s,
-        env: { ...(s.env || {}), ...(envByKey[s.key] || {}) },
-      }));
+      svcList = meta.services.map((s) => {
+        const over = byKey[s.key] || {};
+        return {
+          ...s,
+          ...over,
+          // 关键字段以 paas.json 为准（DB 旧 stack 常缺 context）
+          context: s.context || over.context || '.',
+          dockerfile: s.dockerfile || over.dockerfile || 'Dockerfile',
+          image: s.image || over.image,
+          container_name: s.container_name || over.container_name,
+          host_port: s.host_port != null ? s.host_port : over.host_port,
+          container_port: s.container_port != null ? s.container_port : over.container_port,
+          env_keys: s.env_keys || over.env_keys,
+          env: { ...(s.env || {}), ...(over.env || {}) },
+        };
+      });
     }
   }
 
   if (!svcList.length) {
-    // 单服务默认：根目录 Dockerfile
-    if (fs.existsSync(path.join(sourceRoot, 'Dockerfile'))) {
+    // 自动识别 books 双服务布局
+    const hasBe = fs.existsSync(path.join(sourceRoot, 'backend', 'Dockerfile'));
+    const hasFe = fs.existsSync(path.join(sourceRoot, 'frontend', 'Dockerfile'));
+    if (hasBe && hasFe) {
+      appendLog(log, '自动识别 backend+frontend 双服务');
+      svcList = [
+        {
+          key: 'api',
+          context: 'backend',
+          dockerfile: 'Dockerfile',
+          image: 'book-scanner-api:latest',
+          container_name: 'book-scanner-api',
+          host_port: 3000,
+          container_port: 3000,
+          env: {},
+        },
+        {
+          key: 'web',
+          context: 'frontend',
+          dockerfile: 'Dockerfile',
+          image: 'book-scanner-web:latest',
+          container_name: 'book-scanner-web',
+          host_port: 8080,
+          container_port: 80,
+          env: { API_UPSTREAM: 'book-scanner-api:3000' },
+        },
+      ];
+      if (!net) net = 'book-scanner-net';
+    } else if (fs.existsSync(path.join(sourceRoot, 'Dockerfile'))) {
       svcList = [
         {
           key: 'app',
@@ -601,9 +640,21 @@ async function deployFromSource({
         },
       ];
     } else {
-      appendLog(log, 'ERROR: 无 paas.json 且根目录无 Dockerfile，无法构建');
+      appendLog(log, 'ERROR: 无 paas.json 且无法识别 Dockerfile 布局');
       return { ok: false, log: log.join('\n') };
     }
+  }
+
+  // 补全 context：旧 DB stack 只有 image/container，无 context
+  for (const s of svcList) {
+    if (!s.context || s.context === '.') {
+      if (s.key === 'api' || /api/i.test(s.image || '') || /api/i.test(s.container_name || '')) {
+        if (fs.existsSync(path.join(sourceRoot, 'backend', 'Dockerfile'))) s.context = 'backend';
+      } else if (s.key === 'web' || /web|front/i.test(s.image || '') || /web/i.test(s.container_name || '')) {
+        if (fs.existsSync(path.join(sourceRoot, 'frontend', 'Dockerfile'))) s.context = 'frontend';
+      }
+    }
+    if (!s.dockerfile) s.dockerfile = 'Dockerfile';
   }
 
   // 注入 sharedEnv 到带 env_keys 的服务
@@ -626,6 +677,7 @@ async function deployFromSource({
   for (const s of svcList) {
     const imageRef = s.image.includes(':') ? s.image : `${s.image}:latest`;
     const ctx = path.resolve(sourceRoot, s.context || '.');
+    appendLog(log, `build context=${s.context || '.'} dockerfile=${s.dockerfile || 'Dockerfile'} -> ${imageRef}`);
     const build = await buildImage({
       contextDir: ctx,
       dockerfile: s.dockerfile || 'Dockerfile',

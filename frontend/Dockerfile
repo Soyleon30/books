@@ -7,7 +7,7 @@ RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
-COPY vendor /usr/share/nginx/html/vendor
+COPY vendor/zxing.min.js /usr/share/nginx/html/vendor/zxing.min.js
 COPY index.html /usr/share/nginx/html/index.html
 ENV API_UPSTREAM=backend:3000
 EXPOSE 80
