@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>书本扫描器</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+    #reader { width: 100%; max-width: 320px; margin: 0 auto; }
+    #reader video { border-radius: 1.5rem; }
+    .tab-active { background: rgba(255,255,255,0.2); }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900 min-h-screen">
+  <div class="max-w-md mx-auto bg-white shadow-xl min-h-screen flex flex-col">
+    <div class="bg-blue-600 text-white p-4">
+      <div class="flex items-center justify-between gap-2 mb-3">
+        <div class="flex items-center gap-2 min-w-0">
+          <span class="text-2xl">📚</span>
+          <div class="min-w-0">
+            <h1 class="font-bold text-xl truncate">书本扫描器</h1>
+            <p class="text-xs opacity-90">多图书馆 · 扫码入库</p>
+          </div>
+        </div>
+        <div class="flex gap-1 shrink-0">
+          <button type="button" onclick="showTab(0)" id="tab-0" class="tab-btn tab-active px-3 py-1 rounded-full text-sm font-medium">扫描</button>
+          <button type="button" onclick="showTab(1)" id="tab-1" class="tab-btn px-3 py-1 rounded-full text-sm font-medium">藏书</button>
+          <button type="button" onclick="showTab(2)" id="tab-2" class="tab-btn px-3 py-1 rounded-full text-sm font-medium">馆</button>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 bg-white/15 rounded-2xl px-3 py-2">
+        <span class="text-xs opacity-90 shrink-0">当前馆</span>
+        <select id="library-select" onchange="onLibraryChange()"
+                class="flex-1 bg-transparent text-white text-sm outline-none border-0 min-w-0">
+          <option value="">请选择图书馆</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Scan -->
+    <div id="content-0" class="flex-1 p-4 overflow-auto">
+      <div id="scan-status" class="bg-blue-50 text-blue-700 px-4 py-2 rounded-2xl text-sm mb-4 text-center">请先选择图书馆，再扫描条码</div>
+      <div id="reader" class="mb-4"></div>
+      <button type="button" onclick="toggleScan()" id="scan-btn"
+              class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-4 rounded-2xl text-lg shadow-lg">
+        ▶ 开始扫描
+      </button>
+      <div class="mt-4 flex gap-3">
+        <button type="button" onclick="manualAdd()"
+                class="flex-1 border border-gray-300 hover:border-gray-400 py-3 rounded-2xl font-medium">
+          手动输入ISBN
+        </button>
+        <button type="button" onclick="stopScan()"
+                class="flex-1 border border-gray-300 hover:border-gray-400 py-3 rounded-2xl font-medium">
+          停止
+        </button>
+      </div>
+    </div>
+
+    <!-- Books -->
+    <div id="content-1" class="hidden flex-1 p-4 overflow-auto">
+      <div class="flex items-center gap-3 mb-4">
+        <input id="search-input" type="text" placeholder="搜索书名 / 作者 / ISBN"
+               class="flex-1 border border-gray-300 focus:border-blue-500 rounded-2xl px-4 py-3 text-sm outline-none">
+        <button type="button" onclick="searchBooks()"
+                class="bg-blue-600 text-white px-5 py-3 rounded-2xl">搜索</button>
+      </div>
+      <div id="books-list" class="space-y-3"></div>
+    </div>
+
+    <!-- Libraries manage -->
+    <div id="content-2" class="hidden flex-1 p-4 overflow-auto">
+      <div class="bg-gray-50 rounded-3xl p-4 mb-4">
+        <div class="text-sm font-medium mb-2">新建图书馆</div>
+        <input id="lib-name" type="text" placeholder="名称，如：一楼阅览室"
+               class="w-full border border-gray-300 rounded-2xl px-4 py-3 text-sm mb-2 outline-none focus:border-blue-500">
+        <input id="lib-desc" type="text" placeholder="备注（可选）"
+               class="w-full border border-gray-300 rounded-2xl px-4 py-3 text-sm mb-3 outline-none focus:border-blue-500">
+        <button type="button" onclick="createLibrary()"
+                class="w-full bg-blue-600 text-white py-3 rounded-2xl font-medium">创建</button>
+      </div>
+      <div id="libraries-list" class="space-y-3"></div>
+    </div>
+  </div>
+
+  <div id="result-dialog" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-3xl max-w-sm w-full overflow-hidden">
+      <div id="dialog-content" class="p-6"></div>
+      <div class="border-t p-4 flex gap-3">
+        <button type="button" onclick="closeDialog()" class="flex-1 py-3 text-gray-500 font-medium">关闭</button>
+        <button type="button" id="dialog-action" class="flex-1 bg-blue-600 text-white py-3 rounded-2xl font-medium hidden">确认</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = window.API_BASE || '/api';
+    const LS_LIB = 'bookScanner_libraryId';
+    let html5QrCode = null;
+    let isScanning = false;
+    let pendingBook = null;
+    let scanLock = false;
+    let libraries = [];
+    let currentLibraryId = Number(localStorage.getItem(LS_LIB) || 0) || null;
+
+    function setStatus(msg, type) {
+      const el = document.getElementById('scan-status');
+      el.textContent = msg;
+      el.className = 'px-4 py-2 rounded-2xl text-sm mb-4 text-center ' + (
+        type === 'ok' ? 'bg-green-50 text-green-700' :
+        type === 'warn' ? 'bg-amber-50 text-amber-700' :
+        type === 'err' ? 'bg-red-50 text-red-700' :
+        'bg-blue-50 text-blue-700'
+      );
+    }
+
+    function toast(msg, ok) {
+      const n = document.createElement('div');
+      n.className = 'fixed bottom-6 left-1/2 -translate-x-1/2 px-6 py-3 rounded-3xl shadow-2xl text-sm font-medium text-white z-[60] ' +
+        (ok === false ? 'bg-red-600' : 'bg-green-600');
+      n.textContent = msg;
+      document.body.appendChild(n);
+      setTimeout(() => n.remove(), 2800);
+    }
+
+    function normalizeIsbn(s) {
+      return String(s || '').replace(/[^0-9Xx]/g, '').toUpperCase();
+    }
+
+    function escapeHtml(s) {
+      return String(s || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function coverUrl(url) {
+      return url || 'https://via.placeholder.com/200x280/3b82f6/ffffff?text=Book';
+    }
+
+    async function api(path, options) {
+      const res = await fetch(API_BASE + path, {
+        headers: { 'Content-Type': 'application/json', ...(options && options.headers) },
+        ...options,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const err = new Error(data.error || res.statusText || '请求失败');
+        err.status = res.status;
+        err.data = data;
+        throw err;
+      }
+      return data;
+    }
+
+    function requireLibrary() {
+      if (!currentLibraryId) {
+        toast('请先选择或创建图书馆', false);
+        setStatus('请先选择图书馆，再扫描条码', 'warn');
+        showTab(2);
+        return false;
+      }
+      return true;
+    }
+
+    function currentLibraryName() {
+      const lib = libraries.find((l) => Number(l.id) === Number(currentLibraryId));
+      return lib ? lib.name : '';
+    }
+
+    function renderLibrarySelect() {
+      const sel = document.getElementById('library-select');
+      const prev = currentLibraryId;
+      sel.innerHTML = '<option value="">请选择图书馆</option>';
+      libraries.forEach((lib) => {
+        const opt = document.createElement('option');
+        opt.value = lib.id;
+        opt.textContent = lib.name + '（' + (lib.book_count || 0) + '本）';
+        sel.appendChild(opt);
+      });
+      const exists = libraries.some((l) => Number(l.id) === Number(prev));
+      if (exists) {
+        sel.value = String(prev);
+        currentLibraryId = Number(prev);
+      } else if (libraries.length) {
+        currentLibraryId = Number(libraries[0].id);
+        sel.value = String(currentLibraryId);
+        localStorage.setItem(LS_LIB, String(currentLibraryId));
+      } else {
+        currentLibraryId = null;
+        sel.value = '';
+        localStorage.removeItem(LS_LIB);
+      }
+      updateScanHint();
+    }
+
+    function updateScanHint() {
+      if (!currentLibraryId) {
+        setStatus('请先选择或创建图书馆，再扫描条码', 'warn');
+      } else {
+        setStatus('当前：' + currentLibraryName() + ' — 对准条形码扫描');
+      }
+    }
+
+    function onLibraryChange() {
+      const v = document.getElementById('library-select').value;
+      currentLibraryId = v ? Number(v) : null;
+      if (currentLibraryId) localStorage.setItem(LS_LIB, String(currentLibraryId));
+      else localStorage.removeItem(LS_LIB);
+      stopScan();
+      updateScanHint();
+      const tab1 = document.getElementById('content-1');
+      if (!tab1.classList.contains('hidden')) searchBooks();
+    }
+
+    async function loadLibraries() {
+      try {
+        const data = await api('/libraries');
+        libraries = data.libraries || [];
+        renderLibrarySelect();
+        renderLibrariesList();
+      } catch (e) {
+        toast('加载图书馆失败：' + e.message, false);
+      }
+    }
+
+    function renderLibrariesList() {
+      const box = document.getElementById('libraries-list');
+      if (!libraries.length) {
+        box.innerHTML = '<div class="text-center py-8 text-gray-400">还没有图书馆，请先创建</div>';
+        return;
+      }
+      box.innerHTML = '';
+      libraries.forEach((lib) => {
+        const active = Number(lib.id) === Number(currentLibraryId);
+        const div = document.createElement('div');
+        div.className = 'rounded-3xl p-4 border ' + (active ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white');
+        div.innerHTML = `
+          <div class="flex items-start justify-between gap-2">
+            <div class="min-w-0">
+              <div class="font-medium">${escapeHtml(lib.name)}${active ? ' <span class="text-xs text-blue-600">当前</span>' : ''}</div>
+              <div class="text-xs text-gray-500 mt-1">${escapeHtml(lib.description || '无备注')}</div>
+              <div class="text-xs text-gray-400 mt-1">${lib.book_count || 0} 本图书</div>
+            </div>
+            <div class="flex flex-col gap-2 shrink-0">
+              <button type="button" class="text-blue-600 text-xs use-btn">选用</button>
+              <button type="button" class="text-gray-500 text-xs rename-btn">改名</button>
+              <button type="button" class="text-red-400 text-xs del-btn">删除</button>
+            </div>
+          </div>
+        `;
+        div.querySelector('.use-btn').onclick = () => {
+          currentLibraryId = Number(lib.id);
+          localStorage.setItem(LS_LIB, String(currentLibraryId));
+          document.getElementById('library-select').value = String(currentLibraryId);
+          updateScanHint();
+          renderLibrariesList();
+          toast('已切换到：' + lib.name);
+        };
+        div.querySelector('.rename-btn').onclick = async () => {
+          const name = prompt('新名称', lib.name);
+          if (!name || !name.trim()) return;
+          try {
+            await api('/libraries/' + lib.id, {
+              method: 'PUT',
+              body: JSON.stringify({ name: name.trim(), description: lib.description || '' }),
+            });
+            toast('已改名');
+            await loadLibraries();
+          } catch (e) {
+            toast(e.message, false);
+          }
+        };
+        div.querySelector('.del-btn').onclick = async () => {
+          if (!confirm('删除「' + lib.name + '」将同时删除馆内全部图书，确定？')) return;
+          try {
+            await api('/libraries/' + lib.id, { method: 'DELETE' });
+            toast('已删除');
+            await loadLibraries();
+          } catch (e) {
+            toast(e.message, false);
+          }
+        };
+        box.appendChild(div);
+      });
+    }
+
+    async function createLibrary() {
+      const name = document.getElementById('lib-name').value.trim();
+      const description = document.getElementById('lib-desc').value.trim();
+      if (!name) {
+        toast('请输入名称', false);
+        return;
+      }
+      try {
+        const data = await api('/libraries', {
+          method: 'POST',
+          body: JSON.stringify({ name, description }),
+        });
+        document.getElementById('lib-name').value = '';
+        document.getElementById('lib-desc').value = '';
+        currentLibraryId = Number(data.library.id);
+        localStorage.setItem(LS_LIB, String(currentLibraryId));
+        toast('已创建：' + data.library.name);
+        await loadLibraries();
+      } catch (e) {
+        toast(e.message, false);
+      }
+    }
+
+    function closeDialog() {
+      document.getElementById('result-dialog').classList.add('hidden');
+      document.getElementById('dialog-action').classList.add('hidden');
+      pendingBook = null;
+      scanLock = false;
+    }
+
+    function openDialog(html, actionLabel, actionFn) {
+      document.getElementById('dialog-content').innerHTML = html;
+      const btn = document.getElementById('dialog-action');
+      if (actionLabel && actionFn) {
+        btn.textContent = actionLabel;
+        btn.classList.remove('hidden');
+        btn.onclick = actionFn;
+      } else {
+        btn.classList.add('hidden');
+      }
+      document.getElementById('result-dialog').classList.remove('hidden');
+    }
+
+    async function processScanResult(rawIsbn) {
+      if (scanLock) return;
+      if (!requireLibrary()) return;
+      scanLock = true;
+      const isbn = normalizeIsbn(rawIsbn);
+      if (isbn.length < 10) {
+        scanLock = false;
+        setStatus('条码无效，请重试', 'err');
+        return;
+      }
+
+      await stopScan();
+      setStatus('正在查询 [' + currentLibraryName() + '] ISBN: ' + isbn + ' ...');
+
+      try {
+        const data = await api(
+          '/books/check/' + encodeURIComponent(isbn) + '?library_id=' + currentLibraryId
+        );
+        if (data.exists) {
+          const b = data.book;
+          setStatus('该馆已有此书，未重复录入', 'warn');
+          toast('已存在：' + b.title, false);
+          openDialog(`
+            <div class="text-center">
+              <img src="${coverUrl(b.cover)}" class="mx-auto w-20 h-28 object-cover rounded-2xl shadow mb-4" alt="">
+              <h3 class="font-bold">${escapeHtml(b.title)}</h3>
+              <p class="text-sm text-gray-500">${escapeHtml(b.authors || '')}</p>
+              <p class="text-xs text-gray-400 mt-2">ISBN ${escapeHtml(b.isbn)}</p>
+              <div class="mt-4 text-amber-600 text-sm font-medium">「${escapeHtml(currentLibraryName())}」中已存在，不会重复录入</div>
+            </div>
+          `);
+          return;
+        }
+
+        pendingBook = {
+          library_id: currentLibraryId,
+          isbn,
+          title: (data.meta && data.meta.title) || '未知书名',
+          authors: (data.meta && data.meta.authors) || '未知作者',
+          cover: (data.meta && data.meta.cover) || null,
+          publisher: (data.meta && data.meta.publisher) || null,
+          published: (data.meta && data.meta.published) || null,
+        };
+
+        setStatus('发现新书，可加入「' + currentLibraryName() + '」', 'ok');
+        openDialog(`
+          <div class="text-center">
+            <img src="${coverUrl(pendingBook.cover)}" class="mx-auto w-20 h-28 object-cover rounded-2xl shadow mb-4" alt="">
+            <h3 class="font-bold text-lg">${escapeHtml(pendingBook.title)}</h3>
+            <p class="text-sm text-gray-500 mt-1">${escapeHtml(pendingBook.authors)}</p>
+            <p class="text-xs text-gray-400 mt-2">ISBN ${escapeHtml(isbn)}</p>
+            <p class="text-xs text-blue-600 mt-2">入库到：${escapeHtml(currentLibraryName())}</p>
+            ${data.meta ? '' : '<p class="mt-3 text-red-500 text-sm">未查到在线信息，将按 ISBN 入库</p>'}
+          </div>
+        `, '确认添加', confirmAdd);
+      } catch (e) {
+        setStatus('查询失败：' + e.message, 'err');
+        toast('查询失败：' + e.message, false);
+        scanLock = false;
+      }
+    }
+
+    async function confirmAdd() {
+      if (!pendingBook) return;
+      try {
+        const data = await api('/books', {
+          method: 'POST',
+          body: JSON.stringify(pendingBook),
+        });
+        toast('已加入「' + currentLibraryName() + '」：' + data.book.title);
+        setStatus('添加成功：' + data.book.title, 'ok');
+        closeDialog();
+        loadLibraries();
+      } catch (e) {
+        if (e.status === 409) {
+          toast('该馆已有此书，未重复录入', false);
+          setStatus('该馆已有此书，未重复录入', 'warn');
+          closeDialog();
+        } else {
+          toast('添加失败：' + e.message, false);
+        }
+      }
+    }
+
+    async function toggleScan() {
+      if (isScanning) await stopScan();
+      else await startScan();
+    }
+
+    async function startScan() {
+      if (isScanning) return;
+      if (!requireLibrary()) return;
+      try {
+        if (!html5QrCode) html5QrCode = new Html5Qrcode('reader');
+        await html5QrCode.start(
+          { facingMode: 'environment' },
+          { fps: 12, qrbox: { width: 240, height: 140 }, aspectRatio: 1.5 },
+          (decodedText) => { processScanResult(decodedText); },
+          () => {}
+        );
+        isScanning = true;
+        document.getElementById('scan-btn').textContent = '⏹ 停止扫描';
+        setStatus('扫描中 → ' + currentLibraryName());
+      } catch (err) {
+        setStatus('无法打开摄像头：' + err, 'err');
+        toast('无法打开摄像头，请用 HTTPS 或手动输入', false);
+      }
+    }
+
+    async function stopScan() {
+      if (html5QrCode && isScanning) {
+        try { await html5QrCode.stop(); } catch (_) {}
+      }
+      isScanning = false;
+      document.getElementById('scan-btn').textContent = '▶ 开始扫描';
+    }
+
+    function manualAdd() {
+      if (!requireLibrary()) return;
+      const isbn = prompt('请输入 ISBN（10 或 13 位）');
+      if (isbn) processScanResult(isbn);
+    }
+
+    async function searchBooks() {
+      const list = document.getElementById('books-list');
+      if (!currentLibraryId) {
+        list.innerHTML = '<div class="text-center py-12 text-gray-400">请先选择图书馆</div>';
+        return;
+      }
+      const q = document.getElementById('search-input').value.trim();
+      list.innerHTML = '<div class="text-center py-8 text-gray-400">加载中...</div>';
+      try {
+        const data = await api(
+          '/books?library_id=' + currentLibraryId + '&q=' + encodeURIComponent(q) + '&limit=100'
+        );
+        renderBooks(data.books || []);
+      } catch (e) {
+        list.innerHTML = '<div class="text-center py-8 text-red-500">加载失败：' + escapeHtml(e.message) + '</div>';
+      }
+    }
+
+    function renderBooks(books) {
+      const list = document.getElementById('books-list');
+      if (!books.length) {
+        list.innerHTML = '<div class="text-center py-12 text-gray-400">「' + escapeHtml(currentLibraryName()) + '」暂无图书</div>';
+        return;
+      }
+      list.innerHTML = '';
+      books.forEach((book) => {
+        const div = document.createElement('div');
+        div.className = 'bg-gray-50 rounded-3xl p-4 flex gap-4 shadow-sm';
+        div.innerHTML = `
+          <img src="${coverUrl(book.cover)}" class="w-16 h-20 object-cover rounded-2xl flex-shrink-0" alt="">
+          <div class="flex-1 min-w-0">
+            <div class="font-medium text-base leading-tight line-clamp-2">${escapeHtml(book.title)}</div>
+            <div class="text-xs text-gray-500 mt-1">${escapeHtml(book.authors || '')}</div>
+            <div class="text-xs text-gray-400 mt-1">ISBN ${escapeHtml(book.isbn)}</div>
+            <div class="flex justify-between items-end mt-2">
+              <div class="text-xs text-gray-400">${escapeHtml((book.created_at || '').toString().slice(0, 10))}</div>
+              <button type="button" class="text-red-400 text-xs del-btn">删除</button>
+            </div>
+          </div>
+        `;
+        div.querySelector('.del-btn').onclick = async (ev) => {
+          ev.stopPropagation();
+          if (!confirm('确定从「' + currentLibraryName() + '」删除《' + book.title + '》？')) return;
+          try {
+            await api(
+              '/books/' + encodeURIComponent(book.isbn) + '?library_id=' + currentLibraryId,
+              { method: 'DELETE' }
+            );
+            toast('已删除');
+            searchBooks();
+            loadLibraries();
+          } catch (e) {
+            toast('删除失败：' + e.message, false);
+          }
+        };
+        list.appendChild(div);
+      });
+    }
+
+    function showTab(n) {
+      document.getElementById('content-0').classList.toggle('hidden', n !== 0);
+      document.getElementById('content-1').classList.toggle('hidden', n !== 1);
+      document.getElementById('content-2').classList.toggle('hidden', n !== 2);
+      document.getElementById('tab-0').classList.toggle('tab-active', n === 0);
+      document.getElementById('tab-1').classList.toggle('tab-active', n === 1);
+      document.getElementById('tab-2').classList.toggle('tab-active', n === 2);
+      if (n === 1) searchBooks();
+      if (n === 2) renderLibrariesList();
+      if (n !== 0) stopScan();
+    }
+
+    document.getElementById('search-input').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') searchBooks();
+    });
+
+    loadLibraries();
+  </script>
+</body>
+</html>

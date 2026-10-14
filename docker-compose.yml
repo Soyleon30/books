@@ -1,0 +1,25 @@
+services:
+  backend:
+    build: ./backend
+    container_name: book-scanner-api
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      MYSQL_HOST: ${MYSQL_HOST:-8.157.18.157}
+      MYSQL_PORT: ${MYSQL_PORT:-3319}
+      MYSQL_USER: ${MYSQL_USER:-root}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-books}
+    ports:
+      - "3000:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  frontend:
+    build: ./frontend
+    container_name: book-scanner-web
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend

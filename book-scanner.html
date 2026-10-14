@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>书本扫描器</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap');
+        body { font-family: 'Noto Sans SC', system-ui, sans-serif; }
+        video { max-height: 320px; width: 100%; background: #111; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900 min-h-screen">
+    <div class="max-w-md mx-auto bg-white shadow-xl min-h-screen flex flex-col">
+        <!-- Header -->
+        <div class="bg-blue-600 text-white p-4 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+                <span class="text-2xl">📚</span>
+                <div>
+                    <h1 class="font-bold text-xl">书本扫描器</h1>
+                    <p class="text-xs opacity-90">自动录入你的数据库</p>
+                </div>
+            </div>
+            <button onclick="showTab(0)" id="tab-0" class="tab-btn active px-4 py-1 rounded-full text-sm font-medium">扫描</button>
+            <button onclick="showTab(1)" id="tab-1" class="tab-btn px-4 py-1 rounded-full text-sm font-medium">我的书</button>
+        </div>
+
+        <!-- Scanning UI -->
+        <div id="content-0" class="flex-1 p-4 overflow-auto">
+            <div id="scan-section">
+                <div class="text-center mb-6">
+                    <div id="scan-status" class="bg-blue-50 text-blue-700 px-4 py-2 rounded-2xl text-sm mb-4">请对准条形码扫描</div>
+                    <div class="relative mx-auto" style="width: 280px; height: 280px;">
+                        <video id="video" autoplay playsinline class="w-full h-full object-cover rounded-3xl shadow-inner" style="background:#111;"></video>
+                        <div class="absolute inset-0 border-4 border-white/70 rounded-3xl pointer-events-none"></div>
+                    </div>
+                </div>
+                <button onclick="startScanning()" id="scan-btn" 
+                        class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-4 rounded-2xl text-lg shadow-lg flex items-center justify-center gap-2">
+                    <span>▶ 开始扫描</span>
+                </button>
+                <div class="mt-8 flex gap-3">
+                    <button onclick="manualAdd()" 
+                            class="flex-1 border border-gray-300 hover:border-gray-400 py-3 rounded-2xl font-medium">
+                        手动输入ISBN
+                    </button>
+                    <button onclick="clearScan()" 
+                            class="flex-1 border border-gray-300 hover:border-gray-400 py-3 rounded-2xl font-medium">
+                        清除
+                    </button>
+                </div>
+            </div>
+
+            <!-- Result Dialog -->
+            <div id="result-dialog" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+                <div class="bg-white rounded-3xl max-w-sm w-full mx-4 overflow-hidden">
+                    <div id="dialog-content" class="p-6">
+                        <!-- Dynamic content -->
+                    </div>
+                    <div class="border-t p-4 flex gap-3">
+                        <button onclick="closeDialog()" 
+                                class="flex-1 py-3 text-gray-500 font-medium">取消</button>
+                        <button onclick="addBookFromScan()" id="add-btn"
+                                class="flex-1 bg-blue-600 text-white py-3 rounded-2xl font-medium">确认添加</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- My Books Tab -->
+        <div id="content-1" class="hidden flex-1 p-4 overflow-auto">
+            <div class="flex items-center gap-3 mb-4">
+                <input id="search-input" type="text" placeholder="搜索书名或ISBN" 
+                       class="flex-1 border border-gray-300 focus:border-blue-500 rounded-2xl px-4 py-3 text-sm">
+                <button onclick="searchBooks()" 
+                        class="bg-blue-600 text-white px-5 rounded-2xl">搜索</button>
+            </div>
+            <div id="books-list" class="space-y-3">
+                <!-- Populated by JS -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentIsbn = '';
+        let books = JSON.parse(localStorage.getItem('bookManager_books') || '[]');
+        let html5QrCode = null;
+        let isScanning = false;
+
+        function saveBooks() {
+            localStorage.setItem('bookManager_books', JSON.stringify(books));
+        }
+
+        function formatISBN(isbn) {
+            return isbn.replace(/-/g, '').trim().toUpperCase();
+        }
+
+        function showBookDetails(book) {
+            const html = `
+                <div class="flex gap-4">
+                    <img src="${book.cover}" class="w-24 h-32 object-cover rounded-2xl shadow" onerror="this.src='https://via.placeholder.com/200?text=封面'">
+                    <div class="flex-1">
+                        <h3 class="font-bold text-lg leading-tight">${book.title}</h3>
+                        <p class="text-gray-500 text-sm mt-1">${book.authors}</p>
+                        <p class="text-xs text-gray-400 mt-3">${book.published}</p>
+                    </div>
+                </div>
+            `;
+            document.getElementById('dialog-content').innerHTML = html;
+            document.getElementById('result-dialog').classList.remove('hidden');
+            document.getElementById('add-btn').onclick = () => addBook(book);
+        }
+
+        function addBook(bookData) {
+            const newBook = {
+                isbn: currentIsbn,
+                title: bookData.title || '未知书名',
+                authors: bookData.authors || '未知作者',
+                cover: bookData.cover || 'https://via.placeholder.com/300x400/3b82f6/ffffff?text=📚',
+                dateAdded: new Date().toISOString().split('T')[0]
+            };
+            books.unshift(newBook);
+            saveBooks();
+            closeDialog();
+            showSuccess(`已添加 ${newBook.title}`);
+            renderBooksList();
+            if (document.getElementById('content-1').classList.contains('hidden') === false) renderBooksList();
+        }
+
+        function processScanResult(isbn) {
+            currentIsbn = isbn;
+            const formatted = formatISBN(isbn);
+            
+            const existing = books.find(b => formatISBN(b.isbn) === formatted);
+            
+            if (existing) {
+                showExistsDialog(existing);
+            } else {
+                // No API, just show confirmation with default
+                const html = `
+                    <div class="text-center">
+                        <img src="https://via.placeholder.com/200x280/3b82f6/ffffff?text=📚" class="mx-auto w-20 h-28 object-cover rounded-2xl shadow mb-4">
+                        <h3 class="font-bold text-lg">ISBN: ${isbn}</h3>
+                        <p class="text-sm text-gray-500 mt-1">是否添加此书？</p>
+                        <div class="mt-6 text-red-600 text-sm font-medium">未查询到在线信息</div>
+                    </div>
+                `;
+                document.getElementById('dialog-content').innerHTML = html;
+                document.getElementById('result-dialog').classList.remove('hidden');
+                document.getElementById('add-btn').textContent = '确认添加';
+                document.getElementById('add-btn').onclick = () => addBook({isbn: isbn});
+            }
+        }
+
+        function showExistsDialog(bookData) {
+            const html = `
+                <div class="text-center">
+                    <img src="${bookData.cover}" class="mx-auto w-20 h-28 object-cover rounded-2xl shadow mb-4" onerror="this.src='https://via.placeholder.com/180?text=封面'">
+                    <h3 class="font-bold">${bookData.title}</h3>
+                    <p class="text-sm text-gray-500">${bookData.authors}</p>
+                </div>
+                <div class="mt-6 text-red-600 text-sm font-medium">已在您的数据库中</div>
+            `;
+            document.getElementById('dialog-content').innerHTML = html;
+            document.getElementById('result-dialog').classList.remove('hidden');
+            document.getElementById('add-btn').textContent = '查看详情';
+            document.getElementById('add-btn').onclick = () => {
+                closeDialog();
+                showBookDetails(bookData);
+            };
+        }
+
+        function startScanning() {
+            if (isScanning) return;
+            isScanning = true;
+            document.getElementById('scan-btn').innerHTML = `<span>⏹ 停止扫描</span>`;
+            const video = document.getElementById('video');
+            if (!html5QrCode) html5QrCode = new Html5Qrcode("video");
+            html5QrCode.start(
+                { facingMode: "environment" },
+                { fps: 15, qrbox: { width: 220, height: 220 } },
+                (decodedText) => {
+                    const isbn = decodedText.trim();
+                    if (isbn.length > 8) {
+                        html5QrCode.stop();
+                        isScanning = false;
+                        document.getElementById('scan-btn').innerHTML = `<span>▶ 开始扫描</span>`;
+                        processScanResult(isbn);
+                    }
+                },
+                (errorMessage) => {}
+            ).catch(err => {
+                alert('无法访问摄像头：' + err);
+                isScanning = false;
+            });
+        }
+
+        function clearScan() {
+            if (html5QrCode) html5QrCode.stop();
+            document.getElementById('video').srcObject = null;
+            isScanning = false;
+            document.getElementById('scan-btn').innerHTML = `<span>▶ 开始扫描</span>`;
+        }
+
+        function closeDialog() {
+            document.getElementById('result-dialog').classList.add('hidden');
+        }
+
+        function addBookFromScan() {
+            closeDialog();
+            // add happens in button
+        }
+
+        function manualAdd() {
+            const isbn = prompt('请输入ISBN（13位数字）');
+            if (isbn) processScanResult(isbn);
+        }
+
+        function renderBooksList(filteredBooks = books) {
+            const container = document.getElementById('books-list');
+            container.innerHTML = '';
+            if (filteredBooks.length === 0) {
+                container.innerHTML = `<div class="text-center py-12 text-gray-400">还没有添加任何书</div>`;
+                return;
+            }
+            filteredBooks.forEach(book => {
+                const div = document.createElement('div');
+                div.className = 'bg-white rounded-3xl p-4 flex gap-4 shadow-sm';
+                div.innerHTML = `
+                    <img src="${book.cover}" class="w-16 h-20 object-cover rounded-2xl flex-shrink-0" onerror="this.src='https://via.placeholder.com/120?text=📚'">
+                    <div class="flex-1 min-w-0">
+                        <div class="font-medium text-base leading-tight line-clamp-2">${book.title}</div>
+                        <div class="text-xs text-gray-500 mt-1">${book.authors}</div>
+                        <div class="flex justify-between items-end mt-3">
+                            <div class="text-xs text-gray-400">${book.dateAdded}</div>
+                            <button onclick="deleteBook('${book.isbn}');event.stopImmediatePropagation()" 
+                                    class="text-red-400 text-xs">删除</button>
+                        </div>
+                    </div>
+                `;
+                div.onclick = () => showBookDetails(books.find(b => b.isbn === book.isbn));
+                container.appendChild(div);
+            });
+        }
+
+        function deleteBook(isbn) {
+            if (confirm('确定要删除这本书吗？')) {
+                books = books.filter(b => b.isbn !== isbn);
+                saveBooks();
+                renderBooksList();
+            }
+        }
+
+        function searchBooks() {
+            const term = document.getElementById('search-input').value.trim().toLowerCase();
+            const filtered = books.filter(b => 
+                b.title.toLowerCase().includes(term) || 
+                b.isbn.includes(term)
+            );
+            renderBooksList(filtered);
+        }
+
+        function showTab(n) {
+            document.getElementById('content-0').classList.toggle('hidden', n !== 0);
+            document.getElementById('content-1').classList.toggle('hidden', n !== 1);
+            document.querySelectorAll('.tab-btn').forEach((el, i) => {
+                el.classList.toggle('active', i === n);
+                el.classList.toggle('bg-blue-700', i === n);
+            });
+            if (n === 1) renderBooksList();
+        }
+
+        function showSuccess(msg) {
+            const notif = document.createElement('div');
+            notif.className = 'fixed bottom-6 left-1/2 -translate-x-1/2 bg-green-600 text-white px-6 py-3 rounded-3xl shadow-2xl text-sm font-medium';
+            notif.innerHTML = `✅ ${msg}`;
+            document.body.appendChild(notif);
+            setTimeout(() => notif.remove(), 2800);
+        }
+
+        window.onload = function() {
+            if (books.length === 0) {
+                books = [
+                    { isbn: "9787115540333", title: "深入理解计算机系统", authors: "Randal E. Bryant, David R. O'Hallaron", cover: "https://img3.doubanio.com/view/subject/l/public/s29279732.jpg", dateAdded: "2024-10" },
+                    { isbn: "9787111638625", title: "代码大全", authors: "Steve McConnell", cover: "https://img3.doubanio.com/view/subject/l/public/s33581507.jpg", dateAdded: "2024-10" }
+                ];
+                saveBooks();
+            }
+            showTab(0);
+            document.getElementById('search-input').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') searchBooks();
+            });
+        };
+
+        window.startScanning = startScanning;
+        window.clearScan = clearScan;
+        window.closeDialog = closeDialog;
+        window.addBookFromScan = addBookFromScan;
+        window.manualAdd = manualAdd;
+        window.renderBooksList = renderBooksList;
+        window.searchBooks = searchBooks;
+        window.showTab = showTab;
+        window.deleteBook = deleteBook;
+    </script>
+</body>
+</html>
