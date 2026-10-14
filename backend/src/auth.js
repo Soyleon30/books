@@ -136,15 +136,7 @@ async function ensureDefaultAdmin() {
      VALUES (?, ?, ?, 'admin', 'active')`,
     [user, hashPassword(pass), '管理员']
   );
-  try {
-    const [g] = await pool.query(`SELECT id FROM org_groups ORDER BY id ASC LIMIT 1`);
-    if (g[0]) {
-      await pool.query(
-        `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`,
-        [g[0].id, r.insertId]
-      );
-    }
-  } catch (_) {}
+  // 不自动进组；公开馆即可用
   console.log(`[auth] default admin created: ${user} / (see ADMIN_PASSWORD)`);
 }
 

@@ -281,7 +281,7 @@
     <input id="n" type="text" placeholder="新图书馆名称">
     <input id="d" type="text" placeholder="备注">
     <div id="lib-vis-box" class="hide">
-      <label style="display:block;font-size:13px;color:var(--muted);margin:8px 0 4px">可见性（仅管理员）</label>
+      <label style="display:block;font-size:13px;color:var(--muted);margin:8px 0 4px">可见性（仅管理员；公开=所有登录用户）</label>
       <select id="lib-vis" onchange="onLibVisChange()">
         <option value="group">仅所属群组</option>
         <option value="public">所有登录用户</option>
@@ -339,7 +339,7 @@
 
     <div id="admin-users" class="hide">
       <div style="padding-top:16px;border-top:1px solid var(--line)">
-        <p style="font-size:13px;color:var(--muted);margin:0 0 12px">创建用户（无自助注册）。初始密码默认 <b>a123456</b></p>
+        <p style="font-size:13px;color:var(--muted);margin:0 0 12px">创建用户（无自助注册）。初始密码默认 <b>a123456</b>。新用户默认无群组，可看公开馆；群组在「群组」页分配</p>
         <input id="nu" type="text" placeholder="新用户名">
         <input id="nd" type="text" placeholder="显示名（可选）">
         <label style="display:block;font-size:13px;color:var(--muted);margin-bottom:6px">角色</label>

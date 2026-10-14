@@ -109,7 +109,8 @@ async function initDb() {
     const hasLibraryId = await columnExists(conn, 'books', 'library_id');
     if (!hasLibraryId) {
       const [libs] = await conn.query(
-        `INSERT INTO libraries (name, description) VALUES ('默认图书馆', '系统自动创建')
+        `INSERT INTO libraries (name, description, visibility, owner_group_id, group_id)
+         VALUES ('默认图书馆', '全员可见的默认馆', 'public', NULL, NULL)
          ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)`
       );
       let defaultId = libs.insertId;
@@ -136,35 +137,33 @@ async function initDb() {
     const [countRows] = await conn.query(`SELECT COUNT(*) AS c FROM libraries`);
     if (countRows[0].c === 0) {
       await conn.query(
-        `INSERT INTO libraries (name, description) VALUES ('默认图书馆', '系统自动创建')`
+        `INSERT INTO libraries (name, description, visibility, owner_group_id, group_id)
+         VALUES ('默认图书馆', '全员可见的默认馆', 'public', NULL, NULL)`
       );
     }
 
-    // 默认群组 + 挂上无 group 的馆
-    const [gCount] = await conn.query(`SELECT COUNT(*) AS c FROM org_groups`);
-    let defaultGroupId = null;
-    if (gCount[0].c === 0) {
-      const [g] = await conn.query(
-        `INSERT INTO org_groups (name, description) VALUES ('默认群组', '系统自动创建')`
-      );
-      defaultGroupId = g.insertId;
-    } else {
-      const [g] = await conn.query(`SELECT id FROM org_groups ORDER BY id ASC LIMIT 1`);
-      defaultGroupId = g[0].id;
-    }
-    // 迁移：旧馆无 owner/visibility 时，归默认群组私有
+    // 默认馆：全员可见，不依赖群组（无「默认群组」兜底）
     await conn.query(
-      `UPDATE libraries SET owner_group_id = COALESCE(owner_group_id, group_id, ?)
-       WHERE owner_group_id IS NULL`,
-      [defaultGroupId]
+      `UPDATE libraries
+       SET visibility='public', owner_group_id=NULL, group_id=NULL,
+           description=COALESCE(NULLIF(description,''), '全员可见的默认馆')
+       WHERE name='默认图书馆'`
     );
     await conn.query(
-      `UPDATE libraries SET group_id = COALESCE(group_id, owner_group_id) WHERE group_id IS NULL`
+      `DELETE lg FROM library_groups lg
+       INNER JOIN libraries l ON l.id=lg.library_id
+       WHERE l.name='默认图书馆'`
+    );
+
+    // 群组由管理员按需创建；旧数据补全 visibility / library_groups
+    await conn.query(
+      `UPDATE libraries SET visibility='group'
+       WHERE (visibility IS NULL OR visibility='') AND name<>'默认图书馆'`
     );
     await conn.query(
-      `UPDATE libraries SET visibility='group' WHERE visibility IS NULL OR visibility=''`
+      `UPDATE libraries SET group_id = owner_group_id
+       WHERE group_id IS NULL AND owner_group_id IS NOT NULL`
     );
-    // 同步 library_groups：group 可见性写入一行
     await conn.query(`
       INSERT IGNORE INTO library_groups (library_id, group_id)
       SELECT id, owner_group_id FROM libraries
@@ -250,18 +249,7 @@ async function initDb() {
         KEY idx_audit_action (action)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
-    // 已有用户若无群组，加入默认群组
-    const [orphans] = await conn.query(
-      `SELECT u.id FROM users u
-       LEFT JOIN group_members gm ON gm.user_id = u.id
-       WHERE gm.user_id IS NULL`
-    );
-    for (const o of orphans) {
-      await conn.query(
-        `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`,
-        [defaultGroupId, o.id]
-      );
-    }
+    // 新用户默认无群组，由管理员分配；公开馆对所有登录用户可见
   } finally {
     conn.release();
   }

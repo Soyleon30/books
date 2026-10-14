@@ -148,13 +148,9 @@ async function canAccessLibrary(user, libraryId) {
   return { ok: false, lib, reason: 'forbidden' };
 }
 
-async function ensureUserInDefaultGroup(userId) {
-  const [g] = await pool.query(`SELECT id FROM org_groups ORDER BY id ASC LIMIT 1`);
-  if (!g[0]) return;
-  await pool.query(
-    `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`,
-    [g[0].id, userId]
-  );
+/** 新用户不自动进组；公开馆即可访问默认资源 */
+async function ensureUserInDefaultGroup(_userId) {
+  return;
 }
 
 function normalizeVisibility(raw) {
@@ -234,11 +230,6 @@ app.post('/api/auth/login', async (req, res) => {
     }
     if (u.status !== 'active') {
       return res.status(403).json({ error: '账号已禁用' });
-    }
-    try {
-      await ensureUserInDefaultGroup(u.id);
-    } catch (ge) {
-      console.error('[login] ensure group:', ge.message);
     }
     const sess = await createSession(u.id);
     await writeAudit(req, {
@@ -381,15 +372,12 @@ app.post('/api/users', adminRequired, async (req, res) => {
     const groupIds = Array.isArray(req.body.group_ids)
       ? req.body.group_ids.map(Number).filter((n) => n > 0)
       : [];
-    if (groupIds.length) {
-      for (const gid of groupIds) {
-        await pool.query(
-          `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`,
-          [gid, r.insertId]
-        );
-      }
-    } else {
-      await ensureUserInDefaultGroup(r.insertId);
+    // 仅管理员显式指定 group_ids 时加入；否则无群组，待分配
+    for (const gid of groupIds) {
+      await pool.query(
+        `INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)`,
+        [gid, r.insertId]
+      );
     }
     const [rows] = await pool.query(
       `SELECT id, username, display_name, role, status, theme, created_at, updated_at
@@ -756,8 +744,21 @@ app.get('/api/libraries', async (req, res) => {
          GROUP BY l.id
          ORDER BY l.created_at ASC`
       );
+    } else if (!userGids.length) {
+      // 无群组：仍可见 public 馆（默认图书馆等）
+      [rows] = await pool.query(
+        `SELECT l.id, l.group_id, l.owner_group_id, l.visibility, l.name, l.description, l.created_at,
+                g.name AS group_name, og.name AS owner_group_name,
+                COUNT(DISTINCT b.id) AS book_count
+         FROM libraries l
+         LEFT JOIN org_groups g ON g.id=l.group_id
+         LEFT JOIN org_groups og ON og.id=l.owner_group_id
+         LEFT JOIN books b ON b.library_id = l.id
+         WHERE l.visibility='public'
+         GROUP BY l.id
+         ORDER BY l.created_at ASC`
+      );
     } else {
-      if (!userGids.length) return res.json({ libraries: [] });
       [rows] = await pool.query(
         `SELECT l.id, l.group_id, l.owner_group_id, l.visibility, l.name, l.description, l.created_at,
                 g.name AS group_name, og.name AS owner_group_name,
