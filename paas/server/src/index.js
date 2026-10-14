@@ -34,7 +34,6 @@ const upload = multer({
   limits: { fileSize: Number(process.env.MAX_UPLOAD_MB || 2048) * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const n = (file.originalname || '').toLowerCase();
-    // 源码包 zip/tar.gz 或 镜像 tar 均可
     if (
       n.endsWith('.zip') ||
       n.endsWith('.tar') ||
@@ -43,7 +42,7 @@ const upload = multer({
     ) {
       cb(null, true);
     } else {
-      cb(new Error('支持 .zip 源码包 / .tar.gz 源码包 / .tar 镜像包'));
+      cb(new Error('支持 books-source_*.tar.gz / .zip / 镜像 .tar'));
     }
   },
 });
@@ -133,12 +132,45 @@ function buildStackServices(appRow) {
   };
 }
 
+function defaultDeployEnv() {
+  return {
+    MYSQL_HOST: process.env.BOOKS_MYSQL_HOST || process.env.MYSQL_HOST || 'host.docker.internal',
+    MYSQL_PORT: String(process.env.BOOKS_MYSQL_PORT || process.env.MYSQL_PORT || '3319'),
+    MYSQL_USER: process.env.BOOKS_MYSQL_USER || process.env.MYSQL_USER || 'root',
+    MYSQL_PASSWORD:
+      process.env.BOOKS_MYSQL_PASSWORD || process.env.MYSQL_PASSWORD || 'MySql@2024',
+    MYSQL_DATABASE: process.env.BOOKS_MYSQL_DATABASE || 'books',
+    PORT: '3000',
+  };
+}
+
+function isEmptyEnv(env) {
+  return !env || typeof env !== 'object' || Object.keys(env).length === 0 || !env.MYSQL_PASSWORD;
+}
+
+/** 空 {} 则写默认 env 进库，保证面板永远不是 {} */
+async function ensureAppEnvInDb(row) {
+  let env = safeJson(row.env_json);
+  if (!isEmptyEnv(env)) return env;
+  env = { ...defaultDeployEnv(), ...env };
+  if (!env.MYSQL_PASSWORD) env.MYSQL_PASSWORD = defaultDeployEnv().MYSQL_PASSWORD;
+  if (!env.MYSQL_HOST || env.MYSQL_HOST === '127.0.0.1' || env.MYSQL_HOST === 'localhost') {
+    env.MYSQL_HOST = defaultDeployEnv().MYSQL_HOST;
+  }
+  try {
+    await pool.query(`UPDATE apps SET env_json=? WHERE id=?`, [JSON.stringify(env), row.id]);
+    row.env_json = JSON.stringify(env);
+  } catch (_) {}
+  return env;
+}
+
 async function enrichApp(row) {
   const mode = row.deploy_mode || 'single';
+  const env = await ensureAppEnvInDb(row);
   let container = { exists: false };
   let containers = [];
   if (mode === 'stack') {
-    const { services } = buildStackServices(row);
+    const { services } = buildStackServices({ ...row, env_json: JSON.stringify(env) });
     for (const s of services) {
       const st = await runtime.containerStatus(s.container_name);
       containers.push({ ...s, container: st });
@@ -154,7 +186,7 @@ async function enrichApp(row) {
   }
   return {
     ...row,
-    env: safeJson(row.env_json),
+    env,
     stack: safeJson(row.stack_json),
     deploy_mode: mode,
     container,
@@ -165,11 +197,17 @@ async function enrichApp(row) {
 app.get('/api/health', async (_req, res) => {
   try {
     await pool.query('SELECT 1');
+    let version = '1.2.0';
+    try {
+      version = require('../package.json').version || version;
+    } catch (_) {}
     res.json({
       ok: true,
       db: true,
       runtime: runtime.detectRuntime(),
       port: PORT,
+      version,
+      features: ['source-zip', 'image-tar', 'stack'],
     });
   } catch (e) {
     res.status(500).json({ ok: false, db: false, error: e.message });
@@ -267,12 +305,19 @@ app.put('/api/apps/:id', async (req, res) => {
     const hostPort = req.body.host_port !== undefined ? Number(req.body.host_port) : row.host_port;
     const containerPort =
       req.body.container_port !== undefined ? Number(req.body.container_port) : row.container_port;
-    const env =
+    let env =
       req.body.env !== undefined
         ? typeof req.body.env === 'object'
           ? req.body.env
           : safeJson(row.env_json)
         : safeJson(row.env_json);
+    // 禁止存成空 {}
+    if (!env || typeof env !== 'object' || Object.keys(env).length === 0) {
+      env = defaultDeployEnv();
+    }
+    if (!env.MYSQL_PASSWORD) {
+      env = { ...defaultDeployEnv(), ...env };
+    }
     const deployMode =
       req.body.deploy_mode !== undefined
         ? String(req.body.deploy_mode) === 'stack'
@@ -357,10 +402,9 @@ app.get('/api/apps/:id/releases', async (req, res) => {
 function detectPackageKind(filePath, originalName) {
   const n = String(originalName || filePath || '').toLowerCase();
   if (n.endsWith('.zip')) return 'source';
-  if (n.includes('source') && (n.endsWith('.tar.gz') || n.endsWith('.tgz') || n.endsWith('.tar'))) {
-    return 'source';
-  }
-  if (n.endsWith('.tar.gz') || n.endsWith('.tgz')) return 'source'; // 默认当源码（镜像一般是纯 .tar）
+  if (n.endsWith('.tar.gz') || n.endsWith('.tgz')) return 'source';
+  if (n.includes('source') && n.endsWith('.tar')) return 'source';
+  if (n.includes('books-source')) return 'source';
   if (n.endsWith('.tar')) return 'image';
   return 'source';
 }
@@ -397,7 +441,14 @@ app.post('/api/apps/:id/upload', (req, res) => {
       const dest = path.join(appDir, path.basename(req.file.path));
       fs.renameSync(req.file.path, dest);
 
-      // 把 kind 记在 note 前缀，兼容现有表结构
+      // 上传源码 zip 后立刻写 env（从 paas.json 或默认），禁止一直 {}
+      let envWritten = null;
+      if (kind === 'source') {
+        envWritten = await fillEnvFromSourceZip(row, dest);
+      } else {
+        envWritten = await ensureAppEnvInDb(row);
+      }
+
       const noteFull = `[kind=${kind}] ${note}`;
 
       const [r] = await pool.query(
@@ -406,10 +457,16 @@ app.post('/api/apps/:id/upload', (req, res) => {
         [id, version, imageTag, dest, req.file.size || 0, noteFull]
       );
       const rel = await getRelease(r.insertId);
+      const appFresh = await getApp(id);
       res.status(201).json({
         release: rel,
         package_kind: kind,
-        message: kind === 'source' ? '源码上传成功，部署时将在服务器 build' : '镜像上传成功',
+        env: envWritten || safeJson(appFresh && appFresh.env_json),
+        app: await enrichApp(appFresh || row),
+        message:
+          kind === 'source'
+            ? '源码上传成功，环境变量已写入，可直接部署'
+            : '镜像上传成功',
       });
     } catch (e) {
       res.status(500).json({ error: e.message });
@@ -424,14 +481,84 @@ function releaseKind(rel) {
   return detectPackageKind(rel && rel.tar_path, rel && rel.tar_path);
 }
 
+/** 从源码 zip 读 paas.json.env_example，合并默认后写入 apps.env_json */
+async function fillEnvFromSourceZip(row, zipPath) {
+  const defaults = defaultDeployEnv();
+  let fromPaas = {};
+  const tmp = path.join(APPS_DIR, row.slug, `_envpeek_${Date.now()}`);
+  try {
+    fs.mkdirSync(tmp, { recursive: true });
+    const ex = await runtime.extractArchive(zipPath, tmp, []);
+    if (ex && ex.ok) {
+      const root = runtime.resolveSourceRoot(tmp);
+      const meta = runtime.readPaasJson(root);
+      if (meta && meta.env_example && typeof meta.env_example === 'object') {
+        fromPaas = meta.env_example;
+      }
+      if (meta && meta.deploy_mode === 'stack' && meta.services) {
+        try {
+          await pool.query(
+            `UPDATE apps SET deploy_mode='stack', stack_json=COALESCE(stack_json, ?) WHERE id=?`,
+            [
+              JSON.stringify({
+                network: meta.network || `${row.slug}-net`,
+                services: meta.services,
+              }),
+              row.id,
+            ]
+          );
+        } catch (_) {}
+      }
+    }
+  } catch (_) {
+    // 解压失败仍写默认
+  } finally {
+    try {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    } catch (_) {}
+  }
+
+  const existing = safeJson(row.env_json);
+  // 默认 + zip 里的 example + 已有非空字段；强制 host 不是 127
+  const env = {
+    ...defaults,
+    ...fromPaas,
+    ...existing,
+  };
+  if (!env.MYSQL_PASSWORD) env.MYSQL_PASSWORD = defaults.MYSQL_PASSWORD;
+  if (
+    !env.MYSQL_HOST ||
+    env.MYSQL_HOST === '127.0.0.1' ||
+    env.MYSQL_HOST === 'localhost' ||
+    env.MYSQL_HOST === '8.157.18.157'
+  ) {
+    env.MYSQL_HOST = defaults.MYSQL_HOST;
+  }
+  if (!env.MYSQL_PORT) env.MYSQL_PORT = defaults.MYSQL_PORT;
+  if (!env.MYSQL_USER) env.MYSQL_USER = defaults.MYSQL_USER;
+  if (!env.MYSQL_DATABASE) env.MYSQL_DATABASE = defaults.MYSQL_DATABASE;
+  if (!env.PORT) env.PORT = '3000';
+
+  await pool.query(`UPDATE apps SET env_json=? WHERE id=?`, [JSON.stringify(env), row.id]);
+  row.env_json = JSON.stringify(env);
+  return env;
+}
+
+/** 部署前：{} 或缺密码 → 强制补全并写回数据库 */
+async function resolveDeployEnv(row) {
+  return ensureAppEnvInDb(row);
+}
+
 async function runDeploy(row, rel, jobId) {
   const releaseId = rel.id;
-  const env = safeJson(row.env_json);
+  const env = await resolveDeployEnv(row);
   const kind = releaseKind(rel);
   let result;
 
+  // stack 服务 env 依赖 row.env_json，补全后再 build
+  row.env_json = JSON.stringify(env);
+
   if (kind === 'source') {
-    // 通用：源码包 → 服务器 build → 部署（读 paas.json 或 app.stack）
     const workDir = path.join(APPS_DIR, row.slug, `build_${releaseId}`);
     fs.mkdirSync(workDir, { recursive: true });
     const built = (row.deploy_mode || 'single') === 'stack' ? buildStackServices(row) : null;
@@ -448,7 +575,7 @@ async function runDeploy(row, rel, jobId) {
       tarPath: rel.tar_path,
       network: built.network,
       services: built.services,
-      sharedEnv: {},
+      sharedEnv: env,
     });
   } else {
     result = await runtime.deployFromTar({

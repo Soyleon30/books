@@ -101,9 +101,9 @@ if [[ ! -f .env ]]; then
   fi
 fi
 
-# 检查密码是否仍是占位
-if grep -q 'your_mysql_password' .env 2>/dev/null; then
-  warn "检测到 .env 中 MYSQL_PASSWORD 仍是占位符，请先修改后再部署"
+# 检查密码是否为空
+if ! grep -qE '^MYSQL_PASSWORD=.+' .env 2>/dev/null; then
+  warn "检测到 .env 中 MYSQL_PASSWORD 未设置"
   err "请编辑 $APP_DIR/.env"
 fi
 

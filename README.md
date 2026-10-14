@@ -12,7 +12,7 @@ docker-compose.yml
 
 ## MySQL 要求
 
-- 地址：`8.157.18.157:3319`（可用 `.env` 修改）
+- 地址：容器内默认 `host.docker.internal:3319`（可用 `.env` 的 `MYSQL_HOST` 修改）
 - 需事先创建库（表会自动建）：
 
 ```sql

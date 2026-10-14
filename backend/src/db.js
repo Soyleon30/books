@@ -1,10 +1,10 @@
 const mysql = require('mysql2/promise');
 
 const pool = mysql.createPool({
-  host: process.env.MYSQL_HOST || '8.157.18.157',
+  host: process.env.MYSQL_HOST || 'host.docker.internal',
   port: Number(process.env.MYSQL_PORT || 3319),
   user: process.env.MYSQL_USER || 'root',
-  password: process.env.MYSQL_PASSWORD || '',
+  password: process.env.MYSQL_PASSWORD || 'MySql@2024',
   database: process.env.MYSQL_DATABASE || 'books',
   waitForConnections: true,
   connectionLimit: 10,

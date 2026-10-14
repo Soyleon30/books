@@ -27,7 +27,7 @@ set -a
 source .env
 set +a
 
-if [[ -z "${MYSQL_PASSWORD:-}" || "${MYSQL_PASSWORD}" == "your_mysql_password" ]]; then
+if [[ -z "${MYSQL_PASSWORD:-}" ]]; then
   err "请先在 $APP_DIR/.env 填写 MYSQL_PASSWORD"
 fi
 
@@ -43,7 +43,7 @@ npm install --omit=dev
 # MySQL 建库（若有 mysql 客户端）
 if command -v mysql >/dev/null 2>&1; then
   log "确保数据库 ${MYSQL_DATABASE:-lite_paas} 存在..."
-  if ! mysql -h"${MYSQL_HOST:-host.docker.internal}" -P"${MYSQL_PORT:-3306}" -u"${MYSQL_USER:-root}" -p"${MYSQL_PASSWORD}" \
+  if ! mysql -h"${MYSQL_HOST:-host.docker.internal}" -P"${MYSQL_PORT:-3319}" -u"${MYSQL_USER:-root}" -p"${MYSQL_PASSWORD}" \
     -e "CREATE DATABASE IF NOT EXISTS \`${MYSQL_DATABASE:-lite_paas}\` DEFAULT CHARSET utf8mb4;" 2>/dev/null; then
     echo -e "${YLW}!!${NC} 自动建库失败，请手动: CREATE DATABASE lite_paas DEFAULT CHARSET utf8mb4;"
   fi

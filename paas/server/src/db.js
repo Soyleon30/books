@@ -2,9 +2,9 @@ const mysql = require('mysql2/promise');
 
 const pool = mysql.createPool({
   host: process.env.MYSQL_HOST || 'host.docker.internal',
-  port: Number(process.env.MYSQL_PORT || 3306),
+  port: Number(process.env.MYSQL_PORT || 3319),
   user: process.env.MYSQL_USER || 'root',
-  password: process.env.MYSQL_PASSWORD || '',
+  password: process.env.MYSQL_PASSWORD || 'MySql@2024',
   database: process.env.MYSQL_DATABASE || 'lite_paas',
   waitForConnections: true,
   connectionLimit: 10,
@@ -121,10 +121,10 @@ async function initDb() {
     if (rows[0].c === 0) {
       const stack = defaultBookScannerStack();
       const defaultEnv = {
-        MYSQL_HOST: process.env.BOOKS_MYSQL_HOST || process.env.MYSQL_HOST || '8.157.18.157',
-        MYSQL_PORT: process.env.BOOKS_MYSQL_PORT || '3319',
+        MYSQL_HOST: process.env.BOOKS_MYSQL_HOST || process.env.MYSQL_HOST || 'host.docker.internal',
+        MYSQL_PORT: process.env.BOOKS_MYSQL_PORT || process.env.MYSQL_PORT || '3319',
         MYSQL_USER: process.env.BOOKS_MYSQL_USER || process.env.MYSQL_USER || 'root',
-        MYSQL_PASSWORD: process.env.BOOKS_MYSQL_PASSWORD || '',
+        MYSQL_PASSWORD: process.env.BOOKS_MYSQL_PASSWORD || process.env.MYSQL_PASSWORD || 'MySql@2024',
         MYSQL_DATABASE: process.env.BOOKS_MYSQL_DATABASE || 'books',
         PORT: '3000',
       };
@@ -134,7 +134,7 @@ async function initDb() {
         [
           '书本扫描器',
           'book-scanner',
-          '整栈：前端 8080 + API 3000（上传 pack.sh 生成的 book-scanner-images.tar）',
+          '整栈：前端 8080 + API 3000（上传 books-source_*.zip，服务器自动 build）',
           'book-scanner-web',
           'book-scanner-stack',
           8080,
@@ -146,17 +146,62 @@ async function initDb() {
         ]
       );
     } else {
-      // 升级旧预置：若存在 book-scanner 且仍是 single，改为 stack
-      const [old] = await conn.query(`SELECT id, deploy_mode, stack_json FROM apps WHERE slug='book-scanner' LIMIT 1`);
-      if (old[0] && (!old[0].deploy_mode || old[0].deploy_mode === 'single' || !old[0].stack_json)) {
-        await conn.query(
-          `UPDATE apps SET deploy_mode='stack', stack_json=?, description=?, container_name='book-scanner-stack' WHERE id=?`,
-          [
-            JSON.stringify(defaultBookScannerStack()),
-            '整栈：前端 8080 + API 3000（上传 pack.sh 生成的 book-scanner-images.tar）',
-            old[0].id,
-          ]
-        );
+      // 升级旧预置：book-scanner → stack + 补全空 env
+      const [old] = await conn.query(
+        `SELECT id, deploy_mode, stack_json, env_json FROM apps WHERE slug='book-scanner' LIMIT 1`
+      );
+      if (old[0]) {
+        const defaultEnv = {
+          MYSQL_HOST: process.env.BOOKS_MYSQL_HOST || process.env.MYSQL_HOST || 'host.docker.internal',
+          MYSQL_PORT: String(process.env.BOOKS_MYSQL_PORT || process.env.MYSQL_PORT || '3319'),
+          MYSQL_USER: process.env.BOOKS_MYSQL_USER || process.env.MYSQL_USER || 'root',
+          MYSQL_PASSWORD:
+            process.env.BOOKS_MYSQL_PASSWORD || process.env.MYSQL_PASSWORD || 'MySql@2024',
+          MYSQL_DATABASE: process.env.BOOKS_MYSQL_DATABASE || 'books',
+          PORT: '3000',
+        };
+        let envObj = {};
+        try {
+          envObj =
+            typeof old[0].env_json === 'object' && old[0].env_json
+              ? old[0].env_json
+              : JSON.parse(old[0].env_json || '{}');
+        } catch (_) {
+          envObj = {};
+        }
+        // 旧 IP / 空 env 都强制刷成 host.docker.internal 默认
+        const needEnv =
+          !envObj ||
+          Object.keys(envObj).length === 0 ||
+          !envObj.MYSQL_PASSWORD ||
+          !envObj.MYSQL_HOST ||
+          envObj.MYSQL_HOST === '8.157.18.157' ||
+          envObj.MYSQL_HOST === '127.0.0.1' ||
+          envObj.MYSQL_HOST === 'localhost';
+        const needStack =
+          !old[0].deploy_mode ||
+          old[0].deploy_mode === 'single' ||
+          !old[0].stack_json;
+
+        if (needStack || needEnv) {
+          const merged = needEnv ? { ...defaultEnv, ...envObj, ...defaultEnv } : envObj;
+          // needEnv 时 defaultEnv 覆盖旧空值 / 旧 host
+          if (needEnv) {
+            Object.assign(merged, defaultEnv);
+            if (envObj.MYSQL_PASSWORD && envObj.MYSQL_PASSWORD !== 'your_mysql_password') {
+              merged.MYSQL_PASSWORD = envObj.MYSQL_PASSWORD;
+            }
+          }
+          await conn.query(
+            `UPDATE apps SET deploy_mode='stack', stack_json=?, description=?, container_name='book-scanner-stack', env_json=? WHERE id=?`,
+            [
+              JSON.stringify(defaultBookScannerStack()),
+              '整栈：前端 8080 + API 3000（上传 books-source_*.zip，服务器自动 build）',
+              JSON.stringify(needEnv ? merged : envObj),
+              old[0].id,
+            ]
+          );
+        }
       }
     }
   } finally {

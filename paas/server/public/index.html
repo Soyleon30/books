@@ -68,13 +68,13 @@
           <div id="stack-services" class="hidden mb-4 text-xs space-y-1"></div>
 
           <section class="mb-5 p-4 rounded-2xl bg-slate-50 border border-slate-100">
-            <div class="text-sm font-medium mb-2">上传镜像包</div>
+            <div class="text-sm font-medium mb-2">上传部署包</div>
             <p class="text-xs text-slate-500 mb-2" id="upload-tip">
-              整栈应用请上传 <code class="bg-white px-1 rounded">book-scanner-images.tar</code>（由项目 <code class="bg-white px-1 rounded">./scripts/pack.sh</code> 生成）
+              推荐上传 <code class="bg-white px-1 rounded">books-source_*.tar.gz</code>（或 .zip）。服务器自动 build。
             </p>
             <div class="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">
-              <input id="file-input" type="file" accept=".tar,.tar.gz,.tgz" class="flex-1 text-sm file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700">
-              <input id="image-tag" type="text" placeholder="镜像标签" class="sm:w-48 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-500">
+              <input id="file-input" type="file" accept="*/*,.tar.gz,.tgz,.zip,.tar" class="flex-1 text-sm file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700">
+              <input id="image-tag" type="text" placeholder="可选标签" class="sm:w-48 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-500">
               <button type="button" onclick="doUpload()" id="btn-upload" class="px-4 py-2 rounded-xl bg-slate-800 text-white text-sm">上传</button>
             </div>
             <div id="upload-hint" class="text-xs text-slate-400 mt-2"></div>
@@ -202,7 +202,7 @@
       try {
         const h = await api('/health');
         const el = document.getElementById('rt-badge');
-        el.textContent = (h.runtime || 'no-runtime') + (h.db ? ' · db ok' : ' · db fail');
+        el.textContent = 'v' + (h.version || '?') + ' · ' + (h.runtime || 'no-runtime') + (h.db ? ' · db ok' : ' · db fail');
         el.className = 'badge ' + (h.ok ? 'st-running' : 'st-failed');
       } catch (e) {
         document.getElementById('rt-badge').textContent = 'offline';
@@ -265,8 +265,9 @@
       currentId = id;
       selectedReleaseId = null;
       renderList();
-      const a = currentApp();
+      let a = currentApp();
       if (!a) return;
+      if (!soft) a = await ensureAppEnv(a);
       document.getElementById('empty-detail').classList.add('hidden');
       document.getElementById('detail').classList.remove('hidden');
       document.getElementById('d-name').textContent = a.name;
@@ -280,18 +281,17 @@
       document.getElementById('d-port').textContent = '端口 ' + a.host_port + ':' + a.container_port;
       document.getElementById('d-image').textContent = a.image_name;
       document.getElementById('d-ctr').textContent = a.container_name;
-      document.getElementById('image-tag').value =
-        a.deploy_mode === 'stack' ? 'book-scanner-stack:latest' : (a.image_name + ':latest');
+      document.getElementById('image-tag').value = '';
       document.getElementById('upload-hint').textContent =
-        a.latest_version ? ('最近版本: ' + a.latest_version + ' · ' + (a.latest_image_tag || '')) : '尚未上传镜像';
+        a.latest_version ? ('最近版本: ' + a.latest_version) : '请上传 books-source_*.zip';
 
       const hint = document.getElementById('stack-hint');
       const svcBox = document.getElementById('stack-services');
       if (a.deploy_mode === 'stack') {
         hint.classList.remove('hidden');
         hint.innerHTML =
-          '整栈部署：上传 <b>book-scanner-images.tar</b>（含 api+web）→ 点「环境变量」填 MYSQL_* → 部署。<br>' +
-          '前端 http://IP:8080 · API http://IP:3000/api/health · 两容器共享网络，web 通过 API_UPSTREAM 访问 api。';
+          '整栈部署：上传 <b>books-source_*.zip</b> → 确认环境变量 MYSQL_* → 部署（服务器自动 build api+web）。<br>' +
+          '前端 http://IP:8080 · API http://IP:3000/api/health · 两容器共享网络，web 经 API_UPSTREAM 访问 api。';
         svcBox.classList.remove('hidden');
         const svcs = (a.stack && a.stack.services) || [];
         const live = (a.container && a.container.services) || [];
@@ -372,11 +372,17 @@
         const res = await fetch(API + '/apps/' + currentId + '/upload', { method: 'POST', body: fd });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || '上传失败');
-        toast('上传成功');
+        toast(data.message || '上传成功');
         document.getElementById('file-input').value = '';
         selectedReleaseId = data.release && data.release.id;
+        // 上传接口已写 env，刷新列表后环境变量不应再是 {}
         await loadApps();
+        if (currentId) await selectApp(currentId, true);
         await loadReleases();
+        if (data.env && Object.keys(data.env).length) {
+          const a = currentApp();
+          if (a) a.env = data.env;
+        }
       } catch (e) {
         toast(e.message, false);
       } finally {
@@ -389,11 +395,23 @@
       if (!currentId) return;
       const a = currentApp();
       if (a && a.deploy_mode === 'stack') {
-        const env = a.env || {};
-        if (!env.MYSQL_PASSWORD || env.MYSQL_PASSWORD === 'your_mysql_password') {
-          toast('请先点「环境变量」填写 MYSQL_PASSWORD', false);
-          openEnvEdit();
-          return;
+        let env = a.env || {};
+        if (!env.MYSQL_PASSWORD || Object.keys(env).length === 0) {
+          // 自动写入默认 env 再部署
+          env = { ...defaultBooksEnv(), ...env };
+          try {
+            await api('/apps/' + currentId, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ env }),
+            });
+            a.env = env;
+            await loadApps();
+          } catch (e) {
+            toast('请先点「环境变量」填写 MYSQL_PASSWORD', false);
+            openEnvEdit();
+            return;
+          }
         }
       }
       const rid = releaseId || selectedReleaseId;
@@ -452,10 +470,25 @@
       }
     }
 
+    function defaultBooksEnv() {
+      return {
+        MYSQL_HOST: 'host.docker.internal',
+        MYSQL_PORT: '3319',
+        MYSQL_USER: 'root',
+        MYSQL_PASSWORD: 'MySql@2024',
+        MYSQL_DATABASE: 'books',
+        PORT: '3000',
+      };
+    }
+
     function openEnvEdit() {
       const a = currentApp();
       if (!a) return;
-      document.getElementById('env-json').value = JSON.stringify(a.env || {}, null, 2);
+      let env = a.env && typeof a.env === 'object' ? { ...a.env } : {};
+      if (!env || Object.keys(env).length === 0 || !env.MYSQL_PASSWORD) {
+        env = { ...defaultBooksEnv(), ...env };
+      }
+      document.getElementById('env-json').value = JSON.stringify(env, null, 2);
       document.getElementById('env-modal').classList.remove('hidden');
     }
     function closeEnvModal() {
@@ -469,6 +502,7 @@
       } catch (_) {
         return toast('JSON 无效', false);
       }
+      if (!env || Object.keys(env).length === 0) env = defaultBooksEnv();
       try {
         await api('/apps/' + currentId, {
           method: 'PUT',
@@ -482,6 +516,25 @@
       } catch (e) {
         toast(e.message, false);
       }
+    }
+
+    // 选中应用后：若 env 为空，自动写库，避免一直是 {}
+    async function ensureAppEnv(a) {
+      if (!a || !a.id) return a;
+      const env = a.env && typeof a.env === 'object' ? a.env : {};
+      if (Object.keys(env).length > 0 && env.MYSQL_PASSWORD) return a;
+      const filled = { ...defaultBooksEnv(), ...env };
+      try {
+        const data = await api('/apps/' + a.id, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ env: filled }),
+        });
+        a.env = (data.app && data.app.env) || filled;
+        const i = apps.findIndex((x) => x.id === a.id);
+        if (i >= 0) apps[i].env = a.env;
+      } catch (_) {}
+      return a;
     }
 
     function pollJob(jobId) {

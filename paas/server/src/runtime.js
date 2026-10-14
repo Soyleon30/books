@@ -2,18 +2,41 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
+function whichRuntimeBin(name) {
+  const { execFileSync } = require('child_process');
+  try {
+    execFileSync(name, ['--version'], { stdio: 'ignore' });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function detectRuntime() {
   const forced = (process.env.CONTAINER_RUNTIME || '').trim().toLowerCase();
-  if (forced === 'podman' || forced === 'docker') return forced;
-  try {
-    require('child_process').execFileSync('podman', ['--version'], { stdio: 'ignore' });
-    return 'podman';
-  } catch (_) {}
-  try {
-    require('child_process').execFileSync('docker', ['--version'], { stdio: 'ignore' });
+  // 容器内通常只有 docker-cli + 挂载的 sock，没有 podman 二进制
+  if (forced === 'docker' && whichRuntimeBin('docker')) return 'docker';
+  if (forced === 'podman' && whichRuntimeBin('podman')) return 'podman';
+  if (forced === 'podman' && whichRuntimeBin('docker')) {
+    // 强制 podman 但不存在时降级 docker-cli（连同一 sock）
     return 'docker';
-  } catch (_) {}
+  }
+  if (whichRuntimeBin('docker')) return 'docker';
+  if (whichRuntimeBin('podman')) return 'podman';
   return null;
+}
+
+function runEnv() {
+  const env = { ...process.env };
+  // 保证 docker CLI 能找到 sock
+  if (!env.DOCKER_HOST) {
+    if (fs.existsSync('/var/run/docker.sock')) {
+      env.DOCKER_HOST = 'unix:///var/run/docker.sock';
+    } else if (fs.existsSync('/run/podman/podman.sock')) {
+      env.DOCKER_HOST = 'unix:///run/podman/podman.sock';
+    }
+  }
+  return env;
 }
 
 function run(cmd, args, opts = {}) {
@@ -21,7 +44,7 @@ function run(cmd, args, opts = {}) {
     const chunks = [];
     const errChunks = [];
     const child = spawn(cmd, args, {
-      env: { ...process.env, ...(opts.env || {}) },
+      env: { ...runEnv(), ...(opts.env || {}) },
       cwd: opts.cwd || process.cwd(),
       shell: false,
     });
@@ -63,22 +86,39 @@ async function rt(args, log) {
   return r;
 }
 
-async function containerExists(name, log) {
-  const r = await rt(['ps', '-a', '--format', '{{.Names}}'], log);
-  const names = (r.stdout || '')
-    .split(/\r?\n/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return names.includes(name);
+function normalizeCtrName(n) {
+  return String(n || '')
+    .trim()
+    .replace(/^\//, '');
 }
 
+async function containerExists(name, log) {
+  const r = await rt(['ps', '-a', '--format', '{{.Names}}'], log);
+  const want = normalizeCtrName(name);
+  const names = (r.stdout || '')
+    .split(/\r?\n/)
+    .map((s) => normalizeCtrName(s))
+    .filter(Boolean);
+  return names.includes(want);
+}
+
+/** 启动前必须强制删掉同名容器（列表检测在 podman sock 上不可靠） */
 async function stopAndRemove(name, log) {
-  if (!(await containerExists(name, log))) {
-    appendLog(log, `容器不存在: ${name}`);
-    return;
+  const n = normalizeCtrName(name);
+  appendLog(log, `强制清理同名容器: ${n}`);
+  // 不先判断 exists：docker/podman 经 sock 时 ps 与 create 可见性可能不一致
+  await rt(['stop', n], log);
+  await rt(['rm', '-f', n], log);
+  // 再扫一遍名字包含的残留
+  const r = await rt(['ps', '-a', '--format', '{{.Names}}'], log);
+  const left = (r.stdout || '')
+    .split(/\r?\n/)
+    .map((s) => normalizeCtrName(s))
+    .filter((s) => s === n || s.endsWith('/' + n));
+  for (const x of left) {
+    appendLog(log, `再删残留: ${x}`);
+    await rt(['rm', '-f', x], log);
   }
-  await rt(['stop', name], log);
-  await rt(['rm', '-f', name], log);
 }
 
 async function removeImage(imageRef, log) {
@@ -134,6 +174,9 @@ async function runContainer({
   restart = 'unless-stopped',
   log,
 }) {
+  // 每次 run 前强制清同名，避免 "name already in use"
+  await stopAndRemove(name, log);
+
   const args = ['run', '-d', '--name', name, '--restart', restart];
   if (network) args.push('--network', network);
   if (hostPort && containerPort) {
@@ -352,53 +395,116 @@ async function extractArchive(archivePath, destDir, log) {
   const lower = archivePath.toLowerCase();
   appendLog(log, `解压 ${archivePath} -> ${destDir}`);
 
-  if (lower.endsWith('.zip')) {
-    const r = await run('unzip', ['-q', '-o', archivePath, '-d', destDir]);
+  // 优先 tar（Linux 友好；Windows 打的 zip 子目录经常丢）
+  if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz') || lower.endsWith('.tar')) {
+    const r = await run('tar', ['-xf', archivePath, '-C', destDir]);
     if (r.stdout.trim()) appendLog(log, r.stdout.trim());
     if (r.stderr.trim()) appendLog(log, r.stderr.trim());
     if (r.code !== 0) {
-      // 尝试 busybox unzip / 7z
-      const r2 = await run('bsdtar', ['-xf', archivePath, '-C', destDir]);
-      if (r2.code !== 0) {
-        appendLog(log, 'ERROR: 解压 zip 失败，请安装 unzip');
-        return { ok: false, code: r.code };
-      }
+      appendLog(log, 'ERROR: 解压 tar 失败');
+      return { ok: false, code: r.code };
     }
+    listExtracted(destDir, log);
     return { ok: true, code: 0 };
   }
 
-  // tar / tar.gz / tgz
-  const args = ['-xf', archivePath, '-C', destDir];
-  if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) {
-    // GNU tar 自动识别 gzip
+  if (lower.endsWith('.zip')) {
+    // 先 python/zipfile 兼容 Windows 反斜杠 zip；再 unzip；再 tar
+    const py = await run('python3', [
+      '-c',
+      `import zipfile,sys,os
+z=zipfile.ZipFile(sys.argv[1])
+for n in z.namelist():
+  t=n.replace("\\\\","/")
+  if t.endswith("/"): continue
+  dest=os.path.join(sys.argv[2],t)
+  os.makedirs(os.path.dirname(dest),exist_ok=True)
+  with z.open(n) as s, open(dest,"wb") as o: o.write(s.read())
+print("ok",len(z.namelist()))`,
+      archivePath,
+      destDir,
+    ]);
+    if (py.code === 0) {
+      if (py.stdout.trim()) appendLog(log, py.stdout.trim());
+      listExtracted(destDir, log);
+      return { ok: true, code: 0 };
+    }
+    appendLog(log, `python 解压不可用，尝试 unzip (${py.stderr || py.stdout || ''})`);
+
+    const r = await run('unzip', ['-q', '-o', archivePath, '-d', destDir]);
+    if (r.stdout.trim()) appendLog(log, r.stdout.trim());
+    if (r.stderr.trim()) appendLog(log, r.stderr.trim());
+    if (r.code === 0) {
+      listExtracted(destDir, log);
+      return { ok: true, code: 0 };
+    }
+    const r2 = await run('tar', ['-xf', archivePath, '-C', destDir]);
+    if (r2.code === 0) {
+      listExtracted(destDir, log);
+      return { ok: true, code: 0 };
+    }
+    appendLog(log, 'ERROR: 解压 zip 失败');
+    return { ok: false, code: r.code || 1 };
   }
-  const r = await run('tar', args);
-  if (r.stdout.trim()) appendLog(log, r.stdout.trim());
-  if (r.stderr.trim()) appendLog(log, r.stderr.trim());
-  if (r.code !== 0) {
-    appendLog(log, 'ERROR: 解压 tar 失败');
-    return { ok: false, code: r.code };
-  }
-  return { ok: true, code: 0 };
+
+  appendLog(log, 'ERROR: 不支持的包格式');
+  return { ok: false, code: 1 };
 }
 
-/** 若解压后只有一层目录，进入该目录 */
+function listExtracted(destDir, log) {
+  try {
+    const walk = (d, depth, acc) => {
+      if (depth > 3) return;
+      for (const n of fs.readdirSync(d)) {
+        if (n.startsWith('.')) continue;
+        const p = path.join(d, n);
+        const rel = path.relative(destDir, p);
+        const st = fs.statSync(p);
+        acc.push(st.isDirectory() ? rel + '/' : rel);
+        if (st.isDirectory()) walk(p, depth + 1, acc);
+      }
+    };
+    const acc = [];
+    walk(destDir, 0, acc);
+    appendLog(log, `解压后文件(截断): ${acc.slice(0, 40).join(', ')}`);
+  } catch (e) {
+    appendLog(log, `列举解压目录失败: ${e.message}`);
+  }
+}
+
+/** 定位含 paas.json 或 backend 的根目录 */
 function resolveSourceRoot(destDir) {
-  const entries = fs.readdirSync(destDir).filter((n) => !n.startsWith('.'));
-  if (entries.length === 1) {
-    const p = path.join(destDir, entries[0]);
-    if (fs.statSync(p).isDirectory()) {
-      // 有 paas.json 或 Dockerfile 在子目录
-      if (
-        fs.existsSync(path.join(p, 'paas.json')) ||
-        fs.existsSync(path.join(p, 'Dockerfile')) ||
-        fs.existsSync(path.join(p, 'backend')) ||
-        fs.existsSync(path.join(p, 'frontend'))
-      ) {
-        return p;
+  const tryDir = (d) => {
+    if (!d || !fs.existsSync(d)) return null;
+    if (
+      fs.existsSync(path.join(d, 'paas.json')) ||
+      fs.existsSync(path.join(d, 'backend', 'Dockerfile')) ||
+      fs.existsSync(path.join(d, 'frontend', 'Dockerfile'))
+    ) {
+      return d;
+    }
+    return null;
+  };
+
+  let hit = tryDir(destDir);
+  if (hit) return hit;
+
+  // 广搜两层
+  try {
+    for (const n of fs.readdirSync(destDir)) {
+      const p = path.join(destDir, n);
+      if (!fs.statSync(p).isDirectory()) continue;
+      hit = tryDir(p);
+      if (hit) return hit;
+      for (const n2 of fs.readdirSync(p)) {
+        const p2 = path.join(p, n2);
+        if (fs.statSync(p2).isDirectory()) {
+          hit = tryDir(p2);
+          if (hit) return hit;
+        }
       }
     }
-  }
+  } catch (_) {}
   return destDir;
 }
 

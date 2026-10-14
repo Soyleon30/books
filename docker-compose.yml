@@ -6,10 +6,10 @@ services:
     restart: unless-stopped
     environment:
       PORT: 3000
-      MYSQL_HOST: ${MYSQL_HOST:-8.157.18.157}
+      MYSQL_HOST: ${MYSQL_HOST:-host.docker.internal}
       MYSQL_PORT: ${MYSQL_PORT:-3319}
       MYSQL_USER: ${MYSQL_USER:-root}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-MySql@2024}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-books}
     ports:
       - "${API_PORT:-3000}:3000"

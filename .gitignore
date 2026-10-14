@@ -1,4 +1,6 @@
-.env
+# 本地密钥可提交按需；默认仍忽略根 .env（示例用 .env.example）
+# .env
+paas/.env
 node_modules/
 *.log
 dist/
