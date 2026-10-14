@@ -1,0 +1,42 @@
+{
+  "name": "书本扫描器",
+  "slug": "book-scanner",
+  "version": "1.1.0",
+  "description": "ISBN 扫码入库（源码上传，PaaS 服务器自动 build）",
+  "deploy_mode": "stack",
+  "network": "book-scanner-net",
+  "services": [
+    {
+      "key": "api",
+      "name": "API",
+      "context": "backend",
+      "dockerfile": "Dockerfile",
+      "image": "book-scanner-api:latest",
+      "container_name": "book-scanner-api",
+      "host_port": 3000,
+      "container_port": 3000,
+      "env_keys": ["MYSQL_HOST", "MYSQL_PORT", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_DATABASE", "PORT"]
+    },
+    {
+      "key": "web",
+      "name": "前端",
+      "context": "frontend",
+      "dockerfile": "Dockerfile",
+      "image": "book-scanner-web:latest",
+      "container_name": "book-scanner-web",
+      "host_port": 8080,
+      "container_port": 80,
+      "env": {
+        "API_UPSTREAM": "book-scanner-api:3000"
+      }
+    }
+  ],
+  "env_example": {
+    "MYSQL_HOST": "8.157.18.157",
+    "MYSQL_PORT": "3319",
+    "MYSQL_USER": "root",
+    "MYSQL_PASSWORD": "",
+    "MYSQL_DATABASE": "books",
+    "PORT": "3000"
+  }
+}

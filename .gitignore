@@ -1,3 +1,8 @@
 .env
 node_modules/
 *.log
+dist/
+*.tar
+*.tar.gz
+*.zip
+!paas.json

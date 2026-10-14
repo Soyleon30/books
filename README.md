@@ -21,26 +21,57 @@ CREATE DATABASE IF NOT EXISTS books DEFAULT CHARSET utf8mb4;
 
 - 账号需允许从你的 Docker 主机 IP 远程连接。
 
-## 部署（服务器上）
+## 部署（推荐：镜像打包 + 一键脚本，兼容 Podman）
 
-1. 上传整个项目目录到服务器  
-2. 配置环境变量：
+默认部署目录：`/home/grok_books`
+
+### A. 两套独立产物
+
+| 组件 | 脚本 | 产物 |
+|------|------|------|
+| **通用 PaaS** | `./paas/scripts/pack-paas.sh` | `lite-paas_*.tar.gz` 面板 |
+| **books 业务** | `./scripts/pack.sh` | `book-scanner-images.tar` 等 |
+
+PaaS 是通用部署面板；books 只是能产出标准镜像 tar、可被面板部署的一个应用。
 
 ```bash
-cp .env.example .env
-# 编辑 .env，填入 MYSQL_PASSWORD 等
+./paas/scripts/pack-paas.sh   # 只打面板
+./scripts/pack.sh             # 只打 books 镜像
 ```
 
-3. 启动：
+### B1. 装通用 PaaS，再部署 books
 
 ```bash
+# 装面板到 /home/paas
+sudo mkdir -p /home/paas
+unzip -o lite-paas_*.zip -d /tmp/paas-unpack
+sudo cp -a /tmp/paas-unpack/. /home/paas/
+cd /home/paas && cp .env.example .env && vi .env
+sudo ./scripts/install.sh /home/paas
+# :8083 上传 books-source_*.zip → 部署
+```
+
+### B2. 不用面板，命令行部署 books
+
+```bash
+sudo tar -xzf grok_books_deploy_*.tar.gz -C /home/grok_books --strip-components=1
+cd /home/grok_books && cp .env.example .env && vi .env && sudo ./deploy.sh
+```
+
+### 源码直接部署（可选）
+
+```bash
+cp .env.example .env && vi .env
+# docker 或 podman
 docker compose up -d --build
+# 或
+podman compose up -d --build
 ```
 
-4. 访问：
+访问：
 
 - 前端：`http://服务器IP:8080`
-- API 健康检查：`http://服务器IP:3000/api/health`
+- API：`http://服务器IP:3000/api/health`
 
 ## 功能说明
 
@@ -55,9 +86,29 @@ docker compose up -d --build
 
 同一 ISBN 可出现在不同图书馆中；同一馆内 ISBN 唯一。
 
-## 摄像头注意
+## Lite PaaS（可选管理面板 :8083）
 
-浏览器扫码需要 **HTTPS** 或 **localhost**。公网 HTTP 可能无法开摄像头，可用「手动输入 ISBN」。
+目录 `paas/`：网页里选应用、上传镜像 tar、一键部署、看日志。元数据用目标机 MySQL。
+
+```bash
+# 目标机
+sudo mkdir -p /home/paas
+# 上传并解压到 /home/paas
+cd /home/paas && cp .env.example .env && vi .env
+sudo chmod +x scripts/install.sh && sudo ./scripts/install.sh /home/paas
+# 打开 http://IP:8083
+```
+
+详见 [paas/README.md](paas/README.md)。
+
+## 扫码说明（手机 Safari）
+
+- 图书 ISBN 是 **EAN-13 一维条码**，需**横放**对准框中间，约 15–25cm，光线充足
+- 本版已启用 EAN_13 / UPC / Code128 等格式 + BarcodeDetector
+- 扫不上可用「拍照条码图片识别」或「手动输入 ISBN」
+- 更新后请强制刷新页面（清缓存）
+
+公网 HTTP 下部分浏览器限制摄像头；你当前 Safari 能开摄像头即可。
 
 ## API
 

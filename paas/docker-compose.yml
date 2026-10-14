@@ -1,0 +1,27 @@
+# PaaS 面板自身（需挂载容器运行时 socket 才能部署其它应用）
+services:
+  lite-paas:
+    image: lite-paas:latest
+    build: .
+    container_name: lite-paas
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8083}:8083"
+    environment:
+      PORT: 8083
+      MYSQL_HOST: ${MYSQL_HOST:-host.docker.internal}
+      MYSQL_PORT: ${MYSQL_PORT:-3306}
+      MYSQL_USER: ${MYSQL_USER:-root}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-lite_paas}
+      CONTAINER_RUNTIME: ${CONTAINER_RUNTIME:-}
+      DATA_DIR: /data
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-2048}
+    volumes:
+      - ./data:/data
+      # docker:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # podman rootful 可改用:
+      # - /run/podman/podman.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

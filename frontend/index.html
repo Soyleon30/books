@@ -5,11 +5,24 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>书本扫描器</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <script src="/vendor/html5-qrcode.min.js"></script>
   <style>
     body { font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
-    #reader { width: 100%; max-width: 320px; margin: 0 auto; }
-    #reader video { border-radius: 1.5rem; }
+    #reader {
+      width: 100%;
+      max-width: 420px;
+      margin: 0 auto;
+      min-height: 280px;
+      background: #111;
+      border-radius: 1.25rem;
+      overflow: hidden;
+    }
+    #reader video {
+      width: 100% !important;
+      border-radius: 0 !important;
+      object-fit: cover;
+    }
+    #reader img { display: none !important; }
     .tab-active { background: rgba(255,255,255,0.2); }
   </style>
 </head>
@@ -39,9 +52,9 @@
       </div>
     </div>
 
-    <!-- Scan -->
     <div id="content-0" class="flex-1 p-4 overflow-auto">
-      <div id="scan-status" class="bg-blue-50 text-blue-700 px-4 py-2 rounded-2xl text-sm mb-4 text-center">请先选择图书馆，再扫描条码</div>
+      <div id="scan-status" class="bg-blue-50 text-blue-700 px-4 py-2 rounded-2xl text-sm mb-3 text-center">请先选择图书馆，再扫描条码</div>
+      <p class="text-xs text-gray-500 text-center mb-3">将 ISBN 条码横放在框内，距离约 15–25cm，保持稳定</p>
       <div id="reader" class="mb-4"></div>
       <button type="button" onclick="toggleScan()" id="scan-btn"
               class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-4 rounded-2xl text-lg shadow-lg">
@@ -57,9 +70,14 @@
           停止
         </button>
       </div>
+      <div class="mt-3">
+        <label class="block w-full text-center border border-dashed border-gray-300 rounded-2xl py-3 text-sm text-gray-600 cursor-pointer">
+          📷条码图片识别
+          <input type="file" accept="image/*" capture="environment" class="hidden" onchange="scanFromFile(event)">
+        </label>
+      </div>
     </div>
 
-    <!-- Books -->
     <div id="content-1" class="hidden flex-1 p-4 overflow-auto">
       <div class="flex items-center gap-3 mb-4">
         <input id="search-input" type="text" placeholder="搜索书名 / 作者 / ISBN"
@@ -70,7 +88,6 @@
       <div id="books-list" class="space-y-3"></div>
     </div>
 
-    <!-- Libraries manage -->
     <div id="content-2" class="hidden flex-1 p-4 overflow-auto">
       <div class="bg-gray-50 rounded-3xl p-4 mb-4">
         <div class="text-sm font-medium mb-2">新建图书馆</div>
@@ -104,11 +121,24 @@
     let scanLock = false;
     let libraries = [];
     let currentLibraryId = Number(localStorage.getItem(LS_LIB) || 0) || null;
+    let lastDecoded = '';
+    let lastDecodedAt = 0;
+
+    const ISBN_FORMATS = (typeof Html5QrcodeSupportedFormats !== 'undefined') ? [
+      Html5QrcodeSupportedFormats.EAN_13,
+      Html5QrcodeSupportedFormats.EAN_8,
+      Html5QrcodeSupportedFormats.UPC_A,
+      Html5QrcodeSupportedFormats.UPC_E,
+      Html5QrcodeSupportedFormats.CODE_128,
+      Html5QrcodeSupportedFormats.CODE_39,
+      Html5QrcodeSupportedFormats.ITF,
+      Html5QrcodeSupportedFormats.QR_CODE,
+    ] : undefined;
 
     function setStatus(msg, type) {
       const el = document.getElementById('scan-status');
       el.textContent = msg;
-      el.className = 'px-4 py-2 rounded-2xl text-sm mb-4 text-center ' + (
+      el.className = 'px-4 py-2 rounded-2xl text-sm mb-3 text-center ' + (
         type === 'ok' ? 'bg-green-50 text-green-700' :
         type === 'warn' ? 'bg-amber-50 text-amber-700' :
         type === 'err' ? 'bg-red-50 text-red-700' :
@@ -201,7 +231,7 @@
       if (!currentLibraryId) {
         setStatus('请先选择或创建图书馆，再扫描条码', 'warn');
       } else {
-        setStatus('当前：' + currentLibraryName() + ' — 对准条形码扫描');
+        setStatus('当前：' + currentLibraryName() + ' — 对准 ISBN 条码');
       }
     }
 
@@ -334,16 +364,22 @@
     async function processScanResult(rawIsbn) {
       if (scanLock) return;
       if (!requireLibrary()) return;
-      scanLock = true;
+
       const isbn = normalizeIsbn(rawIsbn);
-      if (isbn.length < 10) {
-        scanLock = false;
-        setStatus('条码无效，请重试', 'err');
+      const now = Date.now();
+      if (isbn === lastDecoded && now - lastDecodedAt < 2500) return;
+      lastDecoded = isbn;
+      lastDecodedAt = now;
+
+      if (isbn.length < 8) {
+        setStatus('识别到内容过短，请重试: ' + isbn, 'err');
         return;
       }
 
+      scanLock = true;
       await stopScan();
-      setStatus('正在查询 [' + currentLibraryName() + '] ISBN: ' + isbn + ' ...');
+      setStatus('已识别 ' + isbn + '，正在查询…', 'ok');
+      toast('识别到：' + isbn);
 
       try {
         const data = await api(
@@ -359,7 +395,7 @@
               <h3 class="font-bold">${escapeHtml(b.title)}</h3>
               <p class="text-sm text-gray-500">${escapeHtml(b.authors || '')}</p>
               <p class="text-xs text-gray-400 mt-2">ISBN ${escapeHtml(b.isbn)}</p>
-              <div class="mt-4 text-amber-600 text-sm font-medium">「${escapeHtml(currentLibraryName())}」中已存在，不会重复录入</div>
+              <div class="mt-4 text-amber-600 text-sm font-medium">「${escapeHtml(currentLibraryName())}」中已存在</div>
             </div>
           `);
           return;
@@ -415,6 +451,23 @@
       }
     }
 
+    function ensureScanner() {
+      if (html5QrCode) return html5QrCode;
+      const cfg = {
+        verbose: false,
+        useBarCodeDetectorIfSupported: true,
+      };
+      if (ISBN_FORMATS) cfg.formatsToSupport = ISBN_FORMATS;
+      html5QrCode = new Html5Qrcode('reader', cfg);
+      return html5QrCode;
+    }
+
+    function qrboxSize(viewW, viewH) {
+      const w = Math.floor(Math.min(viewW * 0.92, 360));
+      const h = Math.floor(Math.min(viewH * 0.35, 140));
+      return { width: Math.max(w, 200), height: Math.max(h, 80) };
+    }
+
     async function toggleScan() {
       if (isScanning) await stopScan();
       else await startScan();
@@ -423,35 +476,88 @@
     async function startScan() {
       if (isScanning) return;
       if (!requireLibrary()) return;
+      if (typeof Html5Qrcode === 'undefined') {
+        setStatus('扫码库未加载，请刷新页面', 'err');
+        toast('扫码库未加载', false);
+        return;
+      }
       try {
-        if (!html5QrCode) html5QrCode = new Html5Qrcode('reader');
-        await html5QrCode.start(
-          { facingMode: 'environment' },
-          { fps: 12, qrbox: { width: 240, height: 140 }, aspectRatio: 1.5 },
+        const scanner = ensureScanner();
+        const cameras = await Html5Qrcode.getCameras();
+        let cameraIdOrConfig = { facingMode: 'environment' };
+        if (cameras && cameras.length) {
+          const back = cameras.find((c) => /back|rear|environment|后|后置/i.test(c.label || ''));
+          cameraIdOrConfig = (back || cameras[cameras.length - 1]).id;
+        }
+
+        await scanner.start(
+          cameraIdOrConfig,
+          {
+            fps: 20,
+            qrbox: qrboxSize,
+            aspectRatio: 1.333,
+            disableFlip: false,
+            experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+          },
           (decodedText) => { processScanResult(decodedText); },
           () => {}
         );
         isScanning = true;
         document.getElementById('scan-btn').textContent = '⏹ 停止扫描';
-        setStatus('扫描中 → ' + currentLibraryName());
+        setStatus('扫描中 → ' + currentLibraryName() + '（条码横放框内）');
       } catch (err) {
-        setStatus('无法打开摄像头：' + err, 'err');
-        toast('无法打开摄像头，请用 HTTPS 或手动输入', false);
+        console.error(err);
+        isScanning = false;
+        setStatus('无法启动扫描：' + err, 'err');
+        toast('无法启动扫描，请用手动输入或拍照识别', false);
+        try {
+          if (html5QrCode) {
+            await html5QrCode.clear();
+            html5QrCode = null;
+          }
+        } catch (_) {}
       }
     }
 
     async function stopScan() {
       if (html5QrCode && isScanning) {
         try { await html5QrCode.stop(); } catch (_) {}
+        try { await html5QrCode.clear(); } catch (_) {}
       }
       isScanning = false;
+      html5QrCode = null;
       document.getElementById('scan-btn').textContent = '▶ 开始扫描';
+      const reader = document.getElementById('reader');
+      if (reader) reader.innerHTML = '';
     }
 
     function manualAdd() {
       if (!requireLibrary()) return;
       const isbn = prompt('请输入 ISBN（10 或 13 位）');
       if (isbn) processScanResult(isbn);
+    }
+
+    async function scanFromFile(ev) {
+      const file = ev.target.files && ev.target.files[0];
+      ev.target.value = '';
+      if (!file) return;
+      if (!requireLibrary()) return;
+      try {
+        await stopScan();
+        const scanner = ensureScanner();
+        setStatus('正在识别图片…');
+        const text = await scanner.scanFile(file, true);
+        await processScanResult(text);
+      } catch (e) {
+        setStatus('图片识别失败：' + e, 'err');
+        toast('图片识别失败，请换清晰特写或手动输入', false);
+        try {
+          if (html5QrCode) {
+            await html5QrCode.clear();
+            html5QrCode = null;
+          }
+        } catch (_) {}
+      }
     }
 
     async function searchBooks() {

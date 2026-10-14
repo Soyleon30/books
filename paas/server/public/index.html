@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lite PaaS</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+    .log-box {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px; line-height: 1.45;
+      white-space: pre-wrap; word-break: break-all;
+      background: #0f172a; color: #e2e8f0;
+      border-radius: 12px; padding: 12px; max-height: 420px; overflow: auto;
+    }
+    .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; }
+    .st-running { background: #dcfce7; color: #166534; }
+    .st-stopped, .st-created { background: #f1f5f9; color: #475569; }
+    .st-failed { background: #fee2e2; color: #991b1b; }
+    .st-deploying { background: #dbeafe; color: #1e40af; }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-900 min-h-screen">
+  <div class="max-w-6xl mx-auto p-4 md:p-6">
+    <header class="flex flex-wrap items-center justify-between gap-3 mb-6">
+      <div>
+        <h1 class="text-2xl font-bold tracking-tight">Lite PaaS</h1>
+        <p class="text-sm text-slate-500 mt-1">选择应用 · 上传 pack 镜像 · 一键部署 · 查看日志</p>
+      </div>
+      <div class="flex items-center gap-2 text-sm">
+        <span id="rt-badge" class="badge bg-slate-200 text-slate-600">runtime...</span>
+        <button type="button" onclick="loadApps()" class="px-3 py-2 rounded-xl bg-white border border-slate-200 hover:bg-slate-50">刷新</button>
+        <button type="button" onclick="openCreate()" class="px-3 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700">新建应用</button>
+      </div>
+    </header>
+
+    <div class="grid md:grid-cols-5 gap-4">
+      <aside class="md:col-span-2 space-y-3" id="app-list">
+        <div class="text-center text-slate-400 py-10">加载中...</div>
+      </aside>
+
+      <main class="md:col-span-3 bg-white rounded-2xl border border-slate-200 shadow-sm p-4 md:p-5 min-h-[520px]">
+        <div id="empty-detail" class="text-center text-slate-400 py-24">请选择左侧应用</div>
+        <div id="detail" class="hidden">
+          <div class="flex flex-wrap items-start justify-between gap-2 mb-4">
+            <div>
+              <h2 id="d-name" class="text-xl font-semibold"></h2>
+              <p id="d-desc" class="text-sm text-slate-500 mt-1"></p>
+              <div class="flex flex-wrap gap-2 mt-2 text-xs text-slate-500">
+                <span id="d-status" class="badge st-created">-</span>
+                <span id="d-mode" class="badge st-created"></span>
+                <span id="d-port"></span>
+                <span id="d-image"></span>
+                <span id="d-ctr"></span>
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <button type="button" onclick="doDeploy()" class="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium">部署</button>
+              <button type="button" onclick="doStop()" class="px-3 py-2 rounded-xl border border-slate-200 text-sm">停止</button>
+              <button type="button" onclick="doRestart()" class="px-3 py-2 rounded-xl border border-slate-200 text-sm">重新部署</button>
+              <button type="button" onclick="openEnvEdit()" class="px-3 py-2 rounded-xl border border-slate-200 text-sm">环境变量</button>
+              <button type="button" onclick="doDelete()" class="px-3 py-2 rounded-xl border border-red-200 text-red-600 text-sm">删除</button>
+            </div>
+          </div>
+
+          <div id="stack-hint" class="hidden mb-4 p-3 rounded-xl bg-blue-50 text-blue-800 text-xs leading-relaxed"></div>
+          <div id="stack-services" class="hidden mb-4 text-xs space-y-1"></div>
+
+          <section class="mb-5 p-4 rounded-2xl bg-slate-50 border border-slate-100">
+            <div class="text-sm font-medium mb-2">上传镜像包</div>
+            <p class="text-xs text-slate-500 mb-2" id="upload-tip">
+              整栈应用请上传 <code class="bg-white px-1 rounded">book-scanner-images.tar</code>（由项目 <code class="bg-white px-1 rounded">./scripts/pack.sh</code> 生成）
+            </p>
+            <div class="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">
+              <input id="file-input" type="file" accept=".tar,.tar.gz,.tgz" class="flex-1 text-sm file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700">
+              <input id="image-tag" type="text" placeholder="镜像标签" class="sm:w-48 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-blue-500">
+              <button type="button" onclick="doUpload()" id="btn-upload" class="px-4 py-2 rounded-xl bg-slate-800 text-white text-sm">上传</button>
+            </div>
+            <div id="upload-hint" class="text-xs text-slate-400 mt-2"></div>
+          </section>
+
+          <section class="mb-5">
+            <div class="flex items-center justify-between mb-2">
+              <div class="text-sm font-medium">版本</div>
+              <button type="button" onclick="loadReleases()" class="text-xs text-blue-600">刷新</button>
+            </div>
+            <div id="release-list" class="space-y-2 text-sm"></div>
+          </section>
+
+          <section>
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+              <div class="text-sm font-medium">日志</div>
+              <div class="flex gap-2">
+                <select id="log-source" class="text-xs border border-slate-200 rounded-lg px-2 py-1">
+                  <option value="container">容器日志</option>
+                  <option value="job">最近部署任务</option>
+                </select>
+                <button type="button" onclick="loadLogs()" class="text-xs px-3 py-1 rounded-lg bg-slate-100 hover:bg-slate-200">刷新日志</button>
+                <label class="text-xs flex items-center gap-1 text-slate-500">
+                  <input type="checkbox" id="log-auto" onchange="toggleAutoLog()"> 自动
+                </label>
+              </div>
+            </div>
+            <div id="log-box" class="log-box">选择应用后显示日志</div>
+          </section>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <div id="modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl w-full max-w-md p-5 shadow-xl">
+      <h3 class="font-semibold text-lg mb-4">新建应用</h3>
+      <div class="space-y-3 text-sm">
+        <div>
+          <label class="block text-slate-500 mb-1">名称</label>
+          <input id="m-name" class="w-full border border-slate-200 rounded-xl px-3 py-2 outline-none focus:border-blue-500" placeholder="我的应用">
+        </div>
+        <div>
+          <label class="block text-slate-500 mb-1">说明</label>
+          <input id="m-desc" class="w-full border border-slate-200 rounded-xl px-3 py-2 outline-none focus:border-blue-500" placeholder="可选">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-slate-500 mb-1">主机端口</label>
+            <input id="m-host-port" type="number" value="8080" class="w-full border border-slate-200 rounded-xl px-3 py-2 outline-none focus:border-blue-500">
+          </div>
+          <div>
+            <label class="block text-slate-500 mb-1">容器端口</label>
+            <input id="m-ctr-port" type="number" value="80" class="w-full border border-slate-200 rounded-xl px-3 py-2 outline-none focus:border-blue-500">
+          </div>
+        </div>
+        <div>
+          <label class="block text-slate-500 mb-1">镜像名</label>
+          <input id="m-image" class="w-full border border-slate-200 rounded-xl px-3 py-2 outline-none focus:border-blue-500" placeholder="my-app">
+        </div>
+        <div>
+          <label class="block text-slate-500 mb-1">环境变量 JSON（可选）</label>
+          <textarea id="m-env" rows="3" class="w-full border border-slate-200 rounded-xl px-3 py-2 outline-none focus:border-blue-500 font-mono text-xs" placeholder='{"KEY":"value"}'></textarea>
+        </div>
+      </div>
+      <div class="flex gap-2 mt-5">
+        <button type="button" onclick="closeModal()" class="flex-1 py-2 rounded-xl border border-slate-200">取消</button>
+        <button type="button" onclick="createApp()" class="flex-1 py-2 rounded-xl bg-blue-600 text-white">创建</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="env-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl w-full max-w-lg p-5 shadow-xl">
+      <h3 class="font-semibold text-lg mb-2">环境变量</h3>
+      <p class="text-xs text-slate-500 mb-3">整栈「书本扫描器」必填 MYSQL_*（图书库，不是 PaaS 元数据库）</p>
+      <textarea id="env-json" rows="12" class="w-full border border-slate-200 rounded-xl px-3 py-2 outline-none focus:border-blue-500 font-mono text-xs"></textarea>
+      <div class="flex gap-2 mt-4">
+        <button type="button" onclick="closeEnvModal()" class="flex-1 py-2 rounded-xl border border-slate-200">取消</button>
+        <button type="button" onclick="saveEnv()" class="flex-1 py-2 rounded-xl bg-blue-600 text-white">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 px-5 py-2.5 rounded-2xl text-sm text-white shadow-lg z-[60]"></div>
+
+  <script>
+    const API = '/api';
+    let apps = [];
+    let currentId = null;
+    let selectedReleaseId = null;
+    let autoTimer = null;
+    let pollJobTimer = null;
+
+    function toast(msg, ok) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.className = 'fixed bottom-6 left-1/2 -translate-x-1/2 px-5 py-2.5 rounded-2xl text-sm text-white shadow-lg z-[60] ' +
+        (ok === false ? 'bg-red-600' : 'bg-emerald-600');
+      el.classList.remove('hidden');
+      setTimeout(() => el.classList.add('hidden'), 2800);
+    }
+
+    async function api(path, opts) {
+      const res = await fetch(API + path, opts);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText || '请求失败');
+      return data;
+    }
+
+    function statusClass(s) {
+      s = String(s || '').toLowerCase();
+      if (s.includes('running') || s === 'deployed') return 'st-running';
+      if (s.includes('fail')) return 'st-failed';
+      if (s.includes('deploy')) return 'st-deploying';
+      return 'st-stopped';
+    }
+
+    function escapeHtml(s) {
+      return String(s || '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    async function loadRuntime() {
+      try {
+        const h = await api('/health');
+        const el = document.getElementById('rt-badge');
+        el.textContent = (h.runtime || 'no-runtime') + (h.db ? ' · db ok' : ' · db fail');
+        el.className = 'badge ' + (h.ok ? 'st-running' : 'st-failed');
+      } catch (e) {
+        document.getElementById('rt-badge').textContent = 'offline';
+      }
+    }
+
+    async function loadApps() {
+      try {
+        const data = await api('/apps');
+        apps = data.apps || [];
+        renderList();
+        if (currentId) {
+          const still = apps.find((a) => a.id === currentId);
+          if (still) selectApp(currentId, true);
+          else {
+            currentId = null;
+            document.getElementById('detail').classList.add('hidden');
+            document.getElementById('empty-detail').classList.remove('hidden');
+          }
+        }
+      } catch (e) {
+        document.getElementById('app-list').innerHTML =
+          '<div class="text-red-500 text-sm p-4">' + escapeHtml(e.message) + '</div>';
+      }
+    }
+
+    function renderList() {
+      const box = document.getElementById('app-list');
+      if (!apps.length) {
+        box.innerHTML = '<div class="text-center text-slate-400 py-10 text-sm">暂无应用</div>';
+        return;
+      }
+      box.innerHTML = '';
+      apps.forEach((a) => {
+        const live = a.container && a.container.exists ? (a.container.status || 'up') : '未运行';
+        const active = a.id === currentId;
+        const mode = a.deploy_mode === 'stack' ? '整栈' : '单容器';
+        const div = document.createElement('button');
+        div.type = 'button';
+        div.className = 'w-full text-left p-4 rounded-2xl border transition ' +
+          (active ? 'border-blue-500 bg-blue-50 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300');
+        div.innerHTML = `
+          <div class="flex items-center justify-between gap-2">
+            <div class="font-medium truncate">${escapeHtml(a.name)}</div>
+            <span class="badge ${statusClass(a.status)} shrink-0">${escapeHtml(a.status)}</span>
+          </div>
+          <div class="text-xs text-slate-500 mt-1 truncate">${mode} · :${a.host_port} · ${escapeHtml(a.image_name)}</div>
+          <div class="text-xs text-slate-400 mt-1 truncate">${escapeHtml(live)}</div>
+        `;
+        div.onclick = () => selectApp(a.id);
+        box.appendChild(div);
+      });
+    }
+
+    function currentApp() {
+      return apps.find((a) => a.id === currentId) || null;
+    }
+
+    async function selectApp(id, soft) {
+      currentId = id;
+      selectedReleaseId = null;
+      renderList();
+      const a = currentApp();
+      if (!a) return;
+      document.getElementById('empty-detail').classList.add('hidden');
+      document.getElementById('detail').classList.remove('hidden');
+      document.getElementById('d-name').textContent = a.name;
+      document.getElementById('d-desc').textContent = a.description || '无说明';
+      const st = document.getElementById('d-status');
+      st.textContent = a.status + (a.container && a.container.exists ? ' / ' + (a.container.status || '') : '');
+      st.className = 'badge ' + statusClass(a.status);
+      const modeEl = document.getElementById('d-mode');
+      modeEl.textContent = a.deploy_mode === 'stack' ? 'stack 整栈' : 'single';
+      modeEl.className = 'badge ' + (a.deploy_mode === 'stack' ? 'st-deploying' : 'st-created');
+      document.getElementById('d-port').textContent = '端口 ' + a.host_port + ':' + a.container_port;
+      document.getElementById('d-image').textContent = a.image_name;
+      document.getElementById('d-ctr').textContent = a.container_name;
+      document.getElementById('image-tag').value =
+        a.deploy_mode === 'stack' ? 'book-scanner-stack:latest' : (a.image_name + ':latest');
+      document.getElementById('upload-hint').textContent =
+        a.latest_version ? ('最近版本: ' + a.latest_version + ' · ' + (a.latest_image_tag || '')) : '尚未上传镜像';
+
+      const hint = document.getElementById('stack-hint');
+      const svcBox = document.getElementById('stack-services');
+      if (a.deploy_mode === 'stack') {
+        hint.classList.remove('hidden');
+        hint.innerHTML =
+          '整栈部署：上传 <b>book-scanner-images.tar</b>（含 api+web）→ 点「环境变量」填 MYSQL_* → 部署。<br>' +
+          '前端 http://IP:8080 · API http://IP:3000/api/health · 两容器共享网络，web 通过 API_UPSTREAM 访问 api。';
+        svcBox.classList.remove('hidden');
+        const svcs = (a.stack && a.stack.services) || [];
+        const live = (a.container && a.container.services) || [];
+        svcBox.innerHTML = svcs.map((s) => {
+          const L = live.find((x) => x.container_name === s.container_name);
+          const stt = L && L.container && L.container.exists ? (L.container.status || 'up') : 'down';
+          return `<div class="flex justify-between gap-2 p-2 rounded-lg bg-slate-50 border border-slate-100">
+            <span>${escapeHtml(s.name || s.key)} · ${escapeHtml(s.container_name)} · :${s.host_port}</span>
+            <span class="text-slate-500">${escapeHtml(stt)}</span>
+          </div>`;
+        }).join('');
+      } else {
+        hint.classList.add('hidden');
+        svcBox.classList.add('hidden');
+      }
+
+      if (!soft) {
+        await loadReleases();
+        await loadLogs();
+      }
+    }
+
+    async function loadReleases() {
+      if (!currentId) return;
+      const box = document.getElementById('release-list');
+      box.innerHTML = '<div class="text-slate-400">加载中...</div>';
+      try {
+        const data = await api('/apps/' + currentId + '/releases');
+        const list = data.releases || [];
+        if (!list.length) {
+          box.innerHTML = '<div class="text-slate-400">暂无版本</div>';
+          return;
+        }
+        if (!selectedReleaseId) selectedReleaseId = list[0].id;
+        box.innerHTML = '';
+        list.forEach((r) => {
+          const div = document.createElement('div');
+          const sel = r.id === selectedReleaseId;
+          div.className = 'flex items-center justify-between gap-2 p-3 rounded-xl border ' +
+            (sel ? 'border-blue-400 bg-blue-50' : 'border-slate-100 bg-white');
+          const mb = r.tar_size ? (r.tar_size / 1024 / 1024).toFixed(1) + ' MB' : '-';
+          div.innerHTML = `
+            <button type="button" class="text-left min-w-0 flex-1 pick">
+              <div class="font-medium truncate">${escapeHtml(r.version)}</div>
+              <div class="text-xs text-slate-500 truncate">${escapeHtml(r.image_tag)} · ${mb} · ${escapeHtml(r.status)}</div>
+            </button>
+            <button type="button" class="text-xs text-blue-600 shrink-0 dep">用此版本部署</button>
+          `;
+          div.querySelector('.pick').onclick = () => {
+            selectedReleaseId = r.id;
+            loadReleases();
+          };
+          div.querySelector('.dep').onclick = () => {
+            selectedReleaseId = r.id;
+            doDeploy(r.id);
+          };
+          box.appendChild(div);
+        });
+      } catch (e) {
+        box.innerHTML = '<div class="text-red-500">' + escapeHtml(e.message) + '</div>';
+      }
+    }
+
+    async function doUpload() {
+      if (!currentId) return toast('请先选择应用', false);
+      const file = document.getElementById('file-input').files[0];
+      if (!file) return toast('请选择 .tar 文件', false);
+      const tag = document.getElementById('image-tag').value.trim();
+      const fd = new FormData();
+      fd.append('file', file);
+      if (tag) fd.append('image_tag', tag);
+      const btn = document.getElementById('btn-upload');
+      btn.disabled = true;
+      btn.textContent = '上传中...';
+      document.getElementById('upload-hint').textContent =
+        '上传 ' + file.name + ' (' + (file.size / 1024 / 1024).toFixed(1) + ' MB)...';
+      try {
+        const res = await fetch(API + '/apps/' + currentId + '/upload', { method: 'POST', body: fd });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || '上传失败');
+        toast('上传成功');
+        document.getElementById('file-input').value = '';
+        selectedReleaseId = data.release && data.release.id;
+        await loadApps();
+        await loadReleases();
+      } catch (e) {
+        toast(e.message, false);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '上传';
+      }
+    }
+
+    async function doDeploy(releaseId) {
+      if (!currentId) return;
+      const a = currentApp();
+      if (a && a.deploy_mode === 'stack') {
+        const env = a.env || {};
+        if (!env.MYSQL_PASSWORD || env.MYSQL_PASSWORD === 'your_mysql_password') {
+          toast('请先点「环境变量」填写 MYSQL_PASSWORD', false);
+          openEnvEdit();
+          return;
+        }
+      }
+      const rid = releaseId || selectedReleaseId;
+      try {
+        toast('开始部署...');
+        const data = await api('/apps/' + currentId + '/deploy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(rid ? { release_id: rid } : {}),
+        });
+        document.getElementById('log-source').value = 'job';
+        pollJob(data.job_id);
+      } catch (e) {
+        toast(e.message, false);
+      }
+    }
+
+    async function doStop() {
+      if (!currentId) return;
+      if (!confirm('停止该应用全部容器？')) return;
+      try {
+        const data = await api('/apps/' + currentId + '/stop', { method: 'POST' });
+        document.getElementById('log-box').textContent = data.log || '已停止';
+        toast('已停止');
+        await loadApps();
+      } catch (e) {
+        toast(e.message, false);
+      }
+    }
+
+    async function doRestart() {
+      if (!currentId) return;
+      try {
+        toast('重新部署...');
+        const data = await api('/apps/' + currentId + '/restart', { method: 'POST' });
+        document.getElementById('log-source').value = 'job';
+        pollJob(data.job_id);
+      } catch (e) {
+        toast(e.message, false);
+      }
+    }
+
+    async function doDelete() {
+      if (!currentId) return;
+      const a = currentApp();
+      if (!confirm('删除应用「' + (a && a.name) + '」及其版本文件？')) return;
+      try {
+        await api('/apps/' + currentId, { method: 'DELETE' });
+        toast('已删除');
+        currentId = null;
+        document.getElementById('detail').classList.add('hidden');
+        document.getElementById('empty-detail').classList.remove('hidden');
+        await loadApps();
+      } catch (e) {
+        toast(e.message, false);
+      }
+    }
+
+    function openEnvEdit() {
+      const a = currentApp();
+      if (!a) return;
+      document.getElementById('env-json').value = JSON.stringify(a.env || {}, null, 2);
+      document.getElementById('env-modal').classList.remove('hidden');
+    }
+    function closeEnvModal() {
+      document.getElementById('env-modal').classList.add('hidden');
+    }
+    async function saveEnv() {
+      if (!currentId) return;
+      let env;
+      try {
+        env = JSON.parse(document.getElementById('env-json').value || '{}');
+      } catch (_) {
+        return toast('JSON 无效', false);
+      }
+      try {
+        await api('/apps/' + currentId, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ env }),
+        });
+        toast('已保存环境变量');
+        closeEnvModal();
+        await loadApps();
+        selectApp(currentId, true);
+      } catch (e) {
+        toast(e.message, false);
+      }
+    }
+
+    function pollJob(jobId) {
+      if (!jobId) return loadLogs();
+      if (pollJobTimer) clearInterval(pollJobTimer);
+      const tick = async () => {
+        try {
+          const data = await api('/jobs/' + jobId);
+          const job = data.job;
+          document.getElementById('log-box').textContent = job.log_text || '(等待输出...)';
+          const box = document.getElementById('log-box');
+          box.scrollTop = box.scrollHeight;
+          if (job.status !== 'running' && job.status !== 'pending') {
+            clearInterval(pollJobTimer);
+            pollJobTimer = null;
+            toast(job.status === 'ok' ? '部署完成' : '部署失败', job.status === 'ok');
+            await loadApps();
+            await loadReleases();
+          }
+        } catch (_) {}
+      };
+      tick();
+      pollJobTimer = setInterval(tick, 1200);
+    }
+
+    async function loadLogs() {
+      if (!currentId) return;
+      const src = document.getElementById('log-source').value;
+      const box = document.getElementById('log-box');
+      try {
+        if (src === 'container') {
+          const data = await api('/apps/' + currentId + '/logs?tail=300');
+          box.textContent = data.log || '(空)';
+        } else {
+          const data = await api('/apps/' + currentId + '/jobs');
+          const jobs = data.jobs || [];
+          if (!jobs.length) {
+            box.textContent = '(无部署任务)';
+            return;
+          }
+          const full = await api('/jobs/' + jobs[0].id);
+          box.textContent = full.job.log_text || '(空)';
+        }
+        box.scrollTop = box.scrollHeight;
+      } catch (e) {
+        box.textContent = e.message;
+      }
+    }
+
+    function toggleAutoLog() {
+      if (autoTimer) {
+        clearInterval(autoTimer);
+        autoTimer = null;
+      }
+      if (document.getElementById('log-auto').checked) {
+        autoTimer = setInterval(loadLogs, 3000);
+      }
+    }
+
+    function openCreate() {
+      document.getElementById('modal').classList.remove('hidden');
+    }
+    function closeModal() {
+      document.getElementById('modal').classList.add('hidden');
+    }
+
+    async function createApp() {
+      const name = document.getElementById('m-name').value.trim();
+      const description = document.getElementById('m-desc').value.trim();
+      const host_port = Number(document.getElementById('m-host-port').value);
+      const container_port = Number(document.getElementById('m-ctr-port').value);
+      const image_name = document.getElementById('m-image').value.trim();
+      let env = {};
+      const envRaw = document.getElementById('m-env').value.trim();
+      if (envRaw) {
+        try { env = JSON.parse(envRaw); } catch (_) { return toast('环境变量 JSON 无效', false); }
+      }
+      if (!name) return toast('请填写名称', false);
+      try {
+        const data = await api('/apps', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, description, host_port, container_port, image_name, env }),
+        });
+        closeModal();
+        toast('已创建');
+        await loadApps();
+        selectApp(data.app.id);
+      } catch (e) {
+        toast(e.message, false);
+      }
+    }
+
+    loadRuntime();
+    loadApps();
+    setInterval(loadRuntime, 30000);
+  </script>
+</body>
+</html>
