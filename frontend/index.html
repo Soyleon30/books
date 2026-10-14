@@ -282,14 +282,17 @@
     <input id="n" type="text" placeholder="新图书馆名称">
     <input id="d" type="text" placeholder="备注">
     <div id="lib-vis-box" class="hide">
-      <label style="display:block;font-size:13px;color:var(--muted);margin:8px 0 4px">可见性（仅管理员；公开=所有登录用户）</label>
+      <label style="display:block;font-size:13px;color:var(--muted);margin:8px 0 4px">谁能看到这座馆（仅管理员）</label>
       <select id="lib-vis" onchange="onLibVisChange()">
-        <option value="group">仅所属群组</option>
+        <option value="group">仅一个群组</option>
         <option value="public">所有登录用户</option>
-        <option value="custom">指定多个群组</option>
+        <option value="custom">多个指定群组</option>
       </select>
-      <label style="display:block;font-size:13px;color:var(--muted);margin:4px 0">所属/可见群组</label>
-      <div id="lib-gids" style="max-height:120px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:8px;margin-bottom:10px;font-size:13px"></div>
+      <p id="lib-vis-help" style="font-size:12px;color:var(--muted);margin:0 0 8px;line-height:1.45"></p>
+      <div id="lib-gids-wrap">
+        <label id="lib-gids-label" style="display:block;font-size:13px;color:var(--muted);margin:4px 0">选择群组</label>
+        <div id="lib-gids" style="max-height:140px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:8px;margin-bottom:10px;font-size:13px"></div>
+      </div>
     </div>
     <button type="button" class="btn btn-main" onclick="createLib()">创建图书馆</button>
     <button type="button" id="btn-add-default-lib" class="btn hide" style="margin-top:8px;background:#fff;border:1px solid var(--line);color:#374151;font-size:14px;font-weight:600" onclick="createDefaultLib()">添加默认图书馆</button>
@@ -609,40 +612,94 @@
       const d = await api('/groups');
       allGroups = d.groups || [];
       renderGroupChecks();
+      onLibVisChange();
       renderGroupsAdmin();
     } catch (e) {
       L('groups fail ' + e.message);
     }
   }
 
-  function renderGroupChecks() {
+  function visHelpText(vis) {
+    if (vis === 'public') {
+      return '所有已登录用户都能看到这座馆（不限群组）。适合默认馆、公共书库。';
+    }
+    if (vis === 'custom') {
+      return '只有你勾选的那些群组成员能看到。可勾选多个群组，用于跨组共享。';
+    }
+    return '只有「所属群组」的成员能看到。请单选一个群组作为所属。';
+  }
+
+  function renderGroupChecks(mode, selectedIds) {
     const box = document.getElementById('lib-gids');
+    const wrap = document.getElementById('lib-gids-wrap');
+    const label = document.getElementById('lib-gids-label');
+    const help = document.getElementById('lib-vis-help');
+    const visEl = document.getElementById('lib-vis');
+    const vis = mode || (visEl && visEl.value) || 'group';
+    if (help) help.textContent = visHelpText(vis);
     if (!box) return;
-    if (!allGroups.length) {
-      box.innerHTML = '<span style="color:var(--muted)">暂无群组</span>';
+    if (wrap) wrap.classList.toggle('hide', vis === 'public');
+    if (vis === 'public') {
+      box.innerHTML = '';
       return;
     }
+    if (!allGroups.length) {
+      box.innerHTML =
+        '<span style="color:var(--muted)">还没有群组，请先到「群组」页创建</span>';
+      return;
+    }
+    const sel = new Set((selectedIds || []).map(Number));
+    const multi = vis === 'custom';
+    if (label) {
+      label.textContent = multi
+        ? '勾选可访问的群组（可多选）'
+        : '选择所属群组（单选）';
+    }
+    // group：单选 radio；custom：多选 checkbox
     box.innerHTML = allGroups
-      .map(
-        (g) =>
-          '<label style="display:block;margin:4px 0"><input type="checkbox" data-gid="' +
+      .map((g) => {
+        const checked = sel.has(Number(g.id)) ? ' checked' : '';
+        if (multi) {
+          return (
+            '<label style="display:flex;align-items:center;gap:8px;padding:6px 2px;font-size:14px">' +
+            '<input type="checkbox" data-gid="' +
+            g.id +
+            '"' +
+            checked +
+            '> <span>' +
+            esc(g.name) +
+            '</span></label>'
+          );
+        }
+        return (
+          '<label style="display:flex;align-items:center;gap:8px;padding:6px 2px;font-size:14px">' +
+          '<input type="radio" name="lib-owner-gid" data-gid="' +
           g.id +
-          '"> ' +
+          '"' +
+          checked +
+          '> <span>' +
           esc(g.name) +
-          '</label>'
-      )
+          '</span></label>'
+        );
+      })
       .join('');
+    // group 默认勾第一个
+    if (!multi && !sel.size && box.querySelector('input[data-gid]')) {
+      box.querySelector('input[data-gid]').checked = true;
+    }
   }
 
   function onLibVisChange() {
-    const vis = document.getElementById('lib-vis').value;
-    const box = document.getElementById('lib-gids');
-    if (!box) return;
-    // public 可不选群组；group 建议选一个；custom 多选
-    box.style.opacity = vis === 'public' ? '0.5' : '1';
+    renderGroupChecks();
   }
 
   function selectedLibGroupIds() {
+    const vis = (document.getElementById('lib-vis') || {}).value || 'group';
+    if (vis === 'public') return [];
+    if (vis === 'group') {
+      const one = document.querySelector('#lib-gids input[data-gid]:checked');
+      return one ? [Number(one.getAttribute('data-gid'))] : [];
+    }
     return [...document.querySelectorAll('#lib-gids input[data-gid]:checked')].map((el) =>
       Number(el.getAttribute('data-gid'))
     );
@@ -1369,11 +1426,13 @@
       body.visibility = vis;
       const gids = selectedLibGroupIds();
       if (vis === 'group') {
-        body.owner_group_id = gids[0] || null;
-        body.visible_group_ids = gids[0] ? [gids[0]] : [];
+        if (!gids.length) return toast('请选择一个所属群组', true);
+        body.owner_group_id = gids[0];
+        body.visible_group_ids = [gids[0]];
       } else if (vis === 'custom') {
+        if (!gids.length) return toast('请至少勾选一个可访问群组', true);
         body.visible_group_ids = gids;
-        body.owner_group_id = gids[0] || null;
+        body.owner_group_id = gids[0];
       } else {
         body.visibility = 'public';
         body.visible_group_ids = [];
@@ -1394,38 +1453,136 @@
 
   async function editLibVisibility(lib) {
     if (!isAdmin()) return;
-    const vis = prompt('可见性: group / public / custom', lib.visibility || 'group');
-    if (!vis) return;
-    let visible_group_ids = lib.visible_group_ids || [];
-    if (vis === 'custom' || vis === 'group') {
-      const raw = prompt(
-        '群组ID列表，逗号分隔（当前群组: ' +
-          allGroups.map((g) => g.id + '=' + g.name).join(', ') +
-          ')',
-        (visible_group_ids || []).join(',')
-      );
-      if (raw == null) return;
-      visible_group_ids = raw
-        .split(/[,，\s]+/)
-        .map(Number)
-        .filter((n) => n > 0);
+    if (!allGroups.length) {
+      try {
+        const d = await api('/groups');
+        allGroups = d.groups || [];
+      } catch (_) {}
     }
-    try {
-      await api('/libraries/' + lib.id, {
-        method: 'PUT',
-        body: JSON.stringify({
-          name: lib.name,
-          description: lib.description || '',
-          visibility: vis,
-          owner_group_id: visible_group_ids[0] || lib.owner_group_id,
-          visible_group_ids,
-        }),
-      });
-      toast('可见性已更新');
-      loadLibs();
-    } catch (e) {
-      toast(e.message, true);
+    const curVis = lib.visibility || 'group';
+    const curIds = (lib.visible_group_ids || []).map(Number);
+    if (curVis === 'group' && lib.owner_group_id && !curIds.length) {
+      curIds.push(Number(lib.owner_group_id));
     }
+    const body = document.getElementById('dlg-body');
+    const ok = document.getElementById('dlg-ok');
+    body.innerHTML =
+      '<p style="margin:0 0 8px;font-weight:600">可见范围 · ' +
+      esc(lib.name) +
+      '</p>' +
+      '<label style="display:block;font-size:13px;color:var(--muted);margin:0 0 4px">谁能看到</label>' +
+      '<select id="dlg-vis" style="margin-bottom:8px">' +
+      '<option value="group"' +
+      (curVis === 'group' ? ' selected' : '') +
+      '>仅一个群组</option>' +
+      '<option value="public"' +
+      (curVis === 'public' ? ' selected' : '') +
+      '>所有登录用户</option>' +
+      '<option value="custom"' +
+      (curVis === 'custom' ? ' selected' : '') +
+      '>多个指定群组</option>' +
+      '</select>' +
+      '<p id="dlg-vis-help" style="font-size:12px;color:var(--muted);margin:0 0 8px;line-height:1.45"></p>' +
+      '<div id="dlg-gids-wrap">' +
+      '<label id="dlg-gids-label" style="display:block;font-size:13px;color:var(--muted);margin:0 0 4px">选择群组</label>' +
+      '<div id="dlg-gids" style="max-height:40vh;overflow:auto;text-align:left;border:1px solid var(--line);border-radius:10px;padding:8px"></div>' +
+      '</div>';
+
+    function paintDlgGroups() {
+      const vis = document.getElementById('dlg-vis').value;
+      const help = document.getElementById('dlg-vis-help');
+      const wrap = document.getElementById('dlg-gids-wrap');
+      const label = document.getElementById('dlg-gids-label');
+      const box = document.getElementById('dlg-gids');
+      if (help) help.textContent = visHelpText(vis);
+      if (wrap) wrap.classList.toggle('hide', vis === 'public');
+      if (vis === 'public') {
+        box.innerHTML = '';
+        return;
+      }
+      if (!allGroups.length) {
+        box.innerHTML = '<div class="muted">暂无群组</div>';
+        return;
+      }
+      const multi = vis === 'custom';
+      if (label) {
+        label.textContent = multi ? '勾选可访问的群组（可多选）' : '选择所属群组（单选）';
+      }
+      const sel = new Set(curIds);
+      box.innerHTML = allGroups
+        .map((g) => {
+          const checked = sel.has(Number(g.id)) ? ' checked' : '';
+          if (multi) {
+            return (
+              '<label style="display:flex;align-items:center;gap:8px;padding:8px 4px;border-bottom:1px solid var(--bg);font-size:14px">' +
+              '<input type="checkbox" data-gid="' +
+              g.id +
+              '"' +
+              checked +
+              '> <span>' +
+              esc(g.name) +
+              '</span></label>'
+            );
+          }
+          return (
+            '<label style="display:flex;align-items:center;gap:8px;padding:8px 4px;border-bottom:1px solid var(--bg);font-size:14px">' +
+            '<input type="radio" name="dlg-owner-gid" data-gid="' +
+            g.id +
+            '"' +
+            checked +
+            '> <span>' +
+            esc(g.name) +
+            '</span></label>'
+          );
+        })
+        .join('');
+      if (!multi && !box.querySelector('input:checked') && box.querySelector('input')) {
+        box.querySelector('input').checked = true;
+      }
+    }
+
+    document.getElementById('dlg-vis').onchange = paintDlgGroups;
+    paintDlgGroups();
+    ok.classList.remove('hide');
+    ok.textContent = '保存';
+    ok.onclick = async () => {
+      const vis = document.getElementById('dlg-vis').value;
+      let visible_group_ids = [];
+      let owner_group_id = lib.owner_group_id || null;
+      if (vis === 'public') {
+        visible_group_ids = [];
+        owner_group_id = owner_group_id || null;
+      } else if (vis === 'group') {
+        const one = document.querySelector('#dlg-gids input[data-gid]:checked');
+        if (!one) return toast('请选择一个所属群组', true);
+        owner_group_id = Number(one.getAttribute('data-gid'));
+        visible_group_ids = [owner_group_id];
+      } else {
+        visible_group_ids = [...document.querySelectorAll('#dlg-gids input[data-gid]:checked')].map(
+          (el) => Number(el.getAttribute('data-gid'))
+        );
+        if (!visible_group_ids.length) return toast('请至少勾选一个群组', true);
+        owner_group_id = visible_group_ids[0];
+      }
+      try {
+        await api('/libraries/' + lib.id, {
+          method: 'PUT',
+          body: JSON.stringify({
+            name: lib.name,
+            description: lib.description || '',
+            visibility: vis,
+            owner_group_id,
+            visible_group_ids,
+          }),
+        });
+        closeDlg();
+        toast('可见范围已更新');
+        loadLibs();
+      } catch (e) {
+        toast(e.message, true);
+      }
+    };
+    document.getElementById('dlg').classList.remove('hide');
   }
 
   function closeDlg() {
