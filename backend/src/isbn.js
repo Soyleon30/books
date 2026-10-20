@@ -1,61 +1,14 @@
-const fs = require('fs');
-const path = require('path');
+const crypto = require('crypto');
 const isbnWork = require('./isbnWork');
-
-const logDir = path.join(__dirname, '..', 'logs');
-if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
-
-const scrapeLog = fs.createWriteStream(path.join(logDir, 'scrape.log'), {
-  flags: 'a',
-  encoding: 'utf8',
-});
-const requestLog = fs.createWriteStream(path.join(logDir, 'requests.log'), {
-  flags: 'a',
-  encoding: 'utf8',
-});
-
-const BODY_MAX = Number(process.env.SCRAPE_LOG_BODY_MAX || 8000);
-
-function redactUrl(url) {
-  return String(url || '')
-    .replace(/([?&](?:appKey|apikey|api_key|key)=)[^&]*/gi, '$1***')
-    .replace(/(appKey|apikey|api_key)=([^&\s]+)/gi, '$1=***');
-}
-
-function clip(s, max = BODY_MAX) {
-  const t = typeof s === 'string' ? s : JSON.stringify(s);
-  if (!t) return '';
-  if (t.length <= max) return t;
-  return t.slice(0, max) + `…[truncated ${t.length - max} chars, total ${t.length}]`;
-}
-
-function safeJson(obj, max = BODY_MAX) {
-  try {
-    return clip(JSON.stringify(obj, null, 0), max);
-  } catch {
-    return String(obj);
-  }
-}
-
-function writeLine(stream, obj) {
-  try {
-    stream.write(`${JSON.stringify({ ts: new Date().toISOString(), ...obj })}\n`);
-  } catch (_) {}
-}
-
-/** 刮削总日志：动作 + 入参 + 出参 */
-function logScrape(event, payload = {}) {
-  writeLine(scrapeLog, { event, ...payload });
-  if (process.env.SCRAPE_LOG_CONSOLE === '1') {
-    console.log(`[scrape] ${event}`, safeJson(payload, 500));
-  }
-}
-
-/** HTTP 请求/响应明细 */
-function logHttp(entry) {
-  writeLine(requestLog, entry);
-  writeLine(scrapeLog, { event: 'http', ...entry });
-}
+const {
+  redactUrl,
+  clip,
+  safeJson,
+  logScrape,
+  logHttp,
+  logSummary,
+  runWithContext,
+} = require('./scrapeLog');
 
 function normalizeIsbn(raw) {
   return String(raw || '')
@@ -617,36 +570,115 @@ function mergeMeta(parts) {
  * 主刮削：仅免费源（豆瓣 / 自定义 / Google / OL）
  * isbn.work 在其后单独补缺，互不影响
  * @returns {{ meta, debug }}
+ * debug.sites / debug.run_id：各站明细 + 可从 scrape_logs 表按 run_id 查
  */
 async function fetchBookMetaDetailed(isbn) {
   const clean = normalizeIsbn(isbn);
+  const runId = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex');
+  return runWithContext({ runId, isbn: clean }, () => _fetchBookMetaDetailedInner(isbn, clean, runId));
+}
+
+async function _fetchBookMetaDetailedInner(isbn, clean, runId) {
   const t0 = Date.now();
-  logScrape('scrape_start', { isbn_raw: isbn, isbn: clean });
+  logScrape('scrape_start', { isbn_raw: isbn, isbn: clean, run_id: runId });
+  logSummary(`======== SCRAPE START run=${runId} isbn=${clean} raw=${isbn} ========`, {
+    isbn: clean,
+    site: null,
+  });
 
   if (!isValidIsbn(clean)) {
-    const debug = { error: 'invalid isbn' };
-    logScrape('scrape_end', { isbn: clean, ok: false, debug, elapsed_ms: Date.now() - t0 });
+    const debug = { error: 'invalid isbn', sites: [], run_id: runId };
+    logSummary(`INVALID isbn=${clean}`, { isbn: clean });
+    logScrape('scrape_end', { isbn: clean, ok: false, debug, elapsed_ms: Date.now() - t0, run_id: runId });
     return { meta: null, debug };
   }
 
-  const debug = { isbn: clean, tried: [], ok: [], cover_checked: null, isbn_work: null };
+  const debug = {
+    isbn: clean,
+    run_id: runId,
+    tried: [],
+    ok: [],
+    cover_checked: null,
+    isbn_work: null,
+    sites: [],
+  };
   const perSource = {};
 
   async function tryOne(name, fn) {
     debug.tried.push(name);
     const s0 = Date.now();
+    logSummary(`  TRY ${name} ...`, { isbn: clean, site: name });
     try {
       const r = await fn(clean);
-      perSource[name] = { meta: r, elapsed_ms: Date.now() - s0 };
+      const elapsed = Date.now() - s0;
+      perSource[name] = { meta: r, elapsed_ms: elapsed };
       if (r && (r.title || r.cover)) {
         debug.ok.push(name);
+        const siteRow = {
+          site: name,
+          ok: true,
+          elapsed_ms: elapsed,
+          title: r.title || null,
+          authors: r.authors || null,
+          cover: r.cover || null,
+          publisher: r.publisher || null,
+          source: r.source || name,
+        };
+        debug.sites.push(siteRow);
+        logScrape('source_result', {
+          isbn: clean,
+          site: name,
+          ok: true,
+          meta: r,
+          elapsed_ms: elapsed,
+          summary: `OK ${name} title=${r.title || '-'} cover=${r.cover || '-'}`,
+        });
+        logSummary(
+          `  OK   ${name} ${elapsed}ms title=${r.title || '-'} cover=${r.cover || '-'} source=${r.source || name}`,
+          { isbn: clean, site: name, ok: true, meta: r, elapsed_ms: elapsed }
+        );
         return r;
       }
       debug.tried.push(name + ':empty');
+      debug.sites.push({
+        site: name,
+        ok: false,
+        elapsed_ms: elapsed,
+        reason: 'empty',
+        title: null,
+        cover: null,
+      });
+      logScrape('source_result', {
+        isbn: clean,
+        site: name,
+        ok: false,
+        reason: 'empty',
+        elapsed_ms: elapsed,
+        summary: `EMPTY ${name}`,
+      });
+      logSummary(`  EMPTY ${name} ${elapsed}ms`, { isbn: clean, site: name, ok: false, elapsed_ms: elapsed });
       return null;
     } catch (e) {
-      perSource[name] = { error: e.message || String(e), elapsed_ms: Date.now() - s0 };
-      debug.tried.push(name + ':err:' + (e.message || e));
+      const elapsed = Date.now() - s0;
+      const err = e.message || String(e);
+      perSource[name] = { error: err, elapsed_ms: elapsed };
+      debug.tried.push(name + ':err:' + err);
+      debug.sites.push({ site: name, ok: false, elapsed_ms: elapsed, error: err });
+      logScrape('source_result', {
+        isbn: clean,
+        site: name,
+        ok: false,
+        error: err,
+        elapsed_ms: elapsed,
+        summary: `ERR ${name} ${err}`,
+      });
+      logSummary(`  ERR  ${name} ${elapsed}ms ${err}`, {
+        isbn: clean,
+        site: name,
+        ok: false,
+        error: err,
+        elapsed_ms: elapsed,
+      });
       return null;
     }
   }
@@ -662,42 +694,145 @@ async function fetchBookMetaDetailed(isbn) {
     isbn: clean,
     parts: freeResults.map((p) => (p ? { source: p.source, title: p.title, cover: p.cover } : null)),
     merged: meta,
-    per_source: perSource,
+    per_source: Object.fromEntries(
+      Object.entries(perSource).map(([k, v]) => [
+        k,
+        {
+          elapsed_ms: v.elapsed_ms,
+          error: v.error || null,
+          title: v.meta && v.meta.title,
+          cover: v.meta && v.meta.cover,
+          source: v.meta && v.meta.source,
+        },
+      ])
+    ),
+    meta,
+    summary: `MERGE title=${meta && meta.title} cover=${meta && meta.cover}`,
   });
+  logSummary(
+    `  MERGE free -> title=${meta && meta.title} cover=${meta && meta.cover} source=${meta && meta.source}`,
+    { isbn: clean, meta }
+  );
 
   try {
     const before = meta ? { ...meta } : null;
     const filled = await isbnWork.fillGaps(meta, clean);
     debug.isbn_work = filled.debug;
     if (filled.meta) meta = filled.meta;
+    const iwUsed = !!(filled.debug && filled.debug.used);
+    const iwSkip = filled.debug && filled.debug.skipped;
+    debug.sites.push({
+      site: 'isbn-work',
+      ok: iwUsed,
+      used: iwUsed,
+      skipped: iwSkip || null,
+      title: iwUsed && meta ? meta.title : null,
+      cover: iwUsed && meta ? meta.cover : null,
+      debug: filled.debug,
+    });
+    logSummary(
+      `  isbn-work used=${iwUsed} skipped=${iwSkip || '-'} title=${meta && meta.title} cover=${meta && meta.cover}`,
+      { isbn: clean, site: 'isbn-work', ok: iwUsed, meta }
+    );
     logScrape('isbn_work_fill', {
       isbn: clean,
+      site: 'isbn-work',
       before,
       after: meta,
       debug: filled.debug,
+      ok: iwUsed,
+      meta,
+      summary: `isbn-work used=${iwUsed} skipped=${iwSkip || '-'}`,
     });
   } catch (e) {
     debug.isbn_work = { error: e.message || String(e) };
-    logScrape('isbn_work_fill', { isbn: clean, error: e.message || String(e) });
+    debug.sites.push({ site: 'isbn-work', ok: false, error: e.message || String(e) });
+    logSummary(`  isbn-work ERR ${e.message || e}`, {
+      isbn: clean,
+      site: 'isbn-work',
+      ok: false,
+      error: e.message || String(e),
+    });
+    logScrape('isbn_work_fill', {
+      isbn: clean,
+      site: 'isbn-work',
+      ok: false,
+      error: e.message || String(e),
+    });
   }
 
   if (meta && meta.cover) {
     const coverIn = meta.cover;
     const okCover = await probeCover(meta.cover);
     debug.cover_checked = okCover ? 'ok' : 'bad';
-    meta.cover = okCover;
-    logScrape('cover_final', { isbn: clean, in: coverIn, out: okCover, checked: debug.cover_checked });
+    // 探测失败仍保留 URL（浏览器/代理可能仍能显示；服务器探测可能因网络失败）
+    if (okCover) meta.cover = okCover;
+    else {
+      logSummary(`  COVER probe FAIL keep_url=${coverIn}`, {
+        isbn: clean,
+        site: 'probe-cover',
+        ok: false,
+      });
+      debug.cover_kept_without_probe = true;
+    }
+    debug.sites.push({
+      site: 'probe-cover',
+      ok: !!okCover,
+      in: coverIn,
+      out: meta.cover,
+      checked: debug.cover_checked,
+    });
+    logScrape('cover_final', {
+      isbn: clean,
+      site: 'probe-cover',
+      in: coverIn,
+      out: meta.cover,
+      checked: debug.cover_checked,
+      ok: !!okCover,
+      summary: `COVER checked=${debug.cover_checked} url=${meta.cover}`,
+    });
+    logSummary(`  COVER final=${meta.cover} checked=${debug.cover_checked}`, {
+      isbn: clean,
+      site: 'probe-cover',
+      ok: !!okCover,
+    });
   } else {
-    logScrape('cover_final', { isbn: clean, in: null, out: null, checked: 'skip_no_cover' });
+    debug.sites.push({ site: 'probe-cover', ok: false, reason: 'no_cover' });
+    logScrape('cover_final', {
+      isbn: clean,
+      site: 'probe-cover',
+      in: null,
+      out: null,
+      checked: 'skip_no_cover',
+      ok: false,
+      reason: 'no_cover',
+      summary: 'COVER none',
+    });
+    logSummary(`  COVER none`, { isbn: clean, site: 'probe-cover', ok: false });
   }
 
+  const elapsed = Date.now() - t0;
+  const okFinal = !!(meta && (meta.title || meta.cover));
   logScrape('scrape_end', {
     isbn: clean,
-    ok: !!(meta && (meta.title || meta.cover)),
+    ok: okFinal,
     meta,
-    debug,
-    elapsed_ms: Date.now() - t0,
+    debug: {
+      run_id: runId,
+      tried: debug.tried,
+      ok: debug.ok,
+      cover_checked: debug.cover_checked,
+      sites: debug.sites,
+    },
+    elapsed_ms: elapsed,
+    run_id: runId,
+    summary: `END ok=${okFinal} title=${meta && meta.title} cover=${meta && meta.cover} ${elapsed}ms`,
   });
+  logSummary(
+    `======== SCRAPE END run=${runId} isbn=${clean} ok=${okFinal} ` +
+      `title=${meta && meta.title} cover=${meta && meta.cover} ${elapsed}ms ========`,
+    { isbn: clean, ok: okFinal, meta, elapsed_ms: elapsed }
+  );
 
   return { meta, debug };
 }

@@ -330,19 +330,17 @@
     <div id="audit-pager" style="display:flex;gap:8px;justify-content:center;margin-top:12px"></div>
 
     <div style="margin-top:22px;padding-top:16px;border-top:1px solid var(--line)">
-      <p style="font-size:14px;font-weight:600;margin:0 0 6px">刮削调试日志</p>
-      <p style="font-size:12px;color:var(--muted);margin:0 0 10px">记录每次外源请求与完整返回（豆瓣/Google/OL/isbn.work/封面探测）。文件：backend/logs/</p>
+      <p style="font-size:14px;font-weight:600;margin:0 0 6px">刮削日志（MySQL scrape_logs）</p>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 10px">每次请求了哪个站、传了什么、返回了什么，均入库。可按 ISBN / run_id 查。</p>
       <div class="srow">
-        <select id="scrape-log-kind" onchange="loadScrapeLogs()" style="flex:0;min-width:120px">
-          <option value="scrape">scrape.log</option>
-          <option value="requests">requests.log</option>
-        </select>
-        <input id="scrape-log-q" type="text" placeholder="过滤 ISBN/url/event" onkeydown="if(event.key==='Enter')loadScrapeLogs()">
-        <button type="button" onclick="loadScrapeLogs()">刷新</button>
+        <input id="scrape-log-isbn" type="text" placeholder="ISBN" style="flex:0;min-width:120px" onkeydown="if(event.key==='Enter')loadScrapeLogs()">
+        <input id="scrape-log-q" type="text" placeholder="过滤 site/url/event/body" onkeydown="if(event.key==='Enter')loadScrapeLogs()">
+        <button type="button" onclick="loadScrapeLogs()">查库</button>
       </div>
       <div style="display:flex;gap:8px;margin:8px 0;flex-wrap:wrap">
-        <button type="button" class="btn" style="width:auto;padding:6px 12px;font-size:12px" onclick="loadScrapeLogs(500)">近500行</button>
-        <button type="button" class="btn" style="width:auto;padding:6px 12px;font-size:12px" onclick="clearScrapeLogs()">清空当前日志</button>
+        <button type="button" class="btn" style="width:auto;padding:6px 12px;font-size:12px" onclick="loadScrapeRuns()">最近批次</button>
+        <button type="button" class="btn" style="width:auto;padding:6px 12px;font-size:12px" onclick="loadScrapeLogs(100)">近100条</button>
+        <button type="button" class="btn" style="width:auto;padding:6px 12px;font-size:12px" onclick="clearScrapeLogs()">清7天前</button>
       </div>
       <div id="scrape-log-meta" class="muted" style="font-size:12px;margin-bottom:6px"></div>
       <pre id="scrape-log-box" style="max-height:420px;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;font-size:11px;white-space:pre-wrap;word-break:break-all;margin:0">…</pre>
@@ -2102,7 +2100,10 @@
       });
       toast('已刮削：' + (d.book && d.book.title));
       L('scrape ok ' + (d.meta && d.meta.source) + ' ' + (d.book && d.book.title));
-      if (d.scrape_debug) L('debug ' + JSON.stringify(d.scrape_debug.ok || d.scrape_debug.tried));
+      if (d.scrape_debug) {
+        L('debug sites ' + JSON.stringify(d.scrape_debug.sites || d.scrape_debug.ok || d.scrape_debug.tried));
+        if (d.scrape_debug.run_id) L('run_id ' + d.scrape_debug.run_id);
+      }
       await search();
     } catch (e) {
       toast(e.message || '刮削失败', true);
@@ -2200,48 +2201,103 @@
 
   let auditPage = 1;
 
-  let scrapeLogLines = 200;
+  let scrapeLogPageSize = 50;
+  let scrapeLogRunId = '';
 
-  async function loadScrapeLogs(lines) {
+  function fmtScrapeRow(row) {
+    const head =
+      (row.ts ? String(row.ts).replace('T', ' ').slice(0, 19) : '') +
+      ' | ' +
+      (row.event || '') +
+      (row.site ? ' @' + row.site : '') +
+      (row.phase ? '/' + row.phase : '') +
+      (row.ok == null ? '' : row.ok ? ' OK' : ' FAIL') +
+      (row.http_status != null ? ' HTTP' + row.http_status : '') +
+      (row.elapsed_ms != null ? ' ' + row.elapsed_ms + 'ms' : '');
+    const bits = [];
+    if (row.isbn) bits.push('isbn=' + row.isbn);
+    if (row.run_id) bits.push('run=' + String(row.run_id).slice(0, 8));
+    if (row.summary) bits.push(row.summary);
+    if (row.url) bits.push('url=' + row.url);
+    if (row.error) bits.push('err=' + row.error);
+    if (row.meta) bits.push('meta=' + (typeof row.meta === 'string' ? row.meta : JSON.stringify(row.meta)).slice(0, 300));
+    if (row.request) bits.push('REQ=' + (typeof row.request === 'string' ? row.request : JSON.stringify(row.request)).slice(0, 400));
+    if (row.response) bits.push('RES=' + (typeof row.response === 'string' ? row.response : JSON.stringify(row.response)).slice(0, 400));
+    if (row.body) bits.push('BODY=' + String(row.body).slice(0, 600));
+    return head + '\n  ' + bits.join('\n  ');
+  }
+
+  async function loadScrapeLogs(pageSize) {
     if (!isAdmin()) return;
-    if (lines) scrapeLogLines = lines;
+    if (pageSize) scrapeLogPageSize = pageSize;
     const box = document.getElementById('scrape-log-box');
     const meta = document.getElementById('scrape-log-meta');
     if (!box) return;
-    box.textContent = '加载中…';
-    const kind = (document.getElementById('scrape-log-kind') && document.getElementById('scrape-log-kind').value) || 'scrape';
+    box.textContent = '从库加载中…';
     const q = (document.getElementById('scrape-log-q') && document.getElementById('scrape-log-q').value.trim()) || '';
+    const isbn = (document.getElementById('scrape-log-isbn') && document.getElementById('scrape-log-isbn').value.trim()) || '';
     try {
       const qs =
-        '?kind=' +
-        encodeURIComponent(kind) +
-        '&lines=' +
-        scrapeLogLines +
-        (q ? '&q=' + encodeURIComponent(q) : '');
+        '?page=1&page_size=' +
+        scrapeLogPageSize +
+        (q ? '&q=' + encodeURIComponent(q) : '') +
+        (isbn ? '&isbn=' + encodeURIComponent(isbn) : '') +
+        (scrapeLogRunId ? '&run_id=' + encodeURIComponent(scrapeLogRunId) : '');
       const d = await api('/scrape-logs' + qs);
       if (meta) {
         meta.textContent =
-          (d.file || '') +
-          (d.exists === false ? ' （尚无文件，先刮削一次）' : '') +
-          ' · 返回 ' +
+          'MySQL scrape_logs · ' +
           (d.returned || 0) +
-          ' / 总行 ' +
-          (d.total_lines || 0);
+          '/' +
+          (d.total || 0) +
+          (isbn ? ' isbn=' + isbn : '') +
+          (scrapeLogRunId ? ' run=' + scrapeLogRunId.slice(0, 8) : '');
       }
       if (!d.lines || !d.lines.length) {
-        box.textContent = d.exists === false ? '日志文件不存在，请先点「重新刮削」' : '无匹配行';
+        box.textContent = '库中暂无日志。部署本版后点「重新刮削」再查。';
         return;
       }
-      box.textContent = d.lines
-        .map((row) => {
-          try {
-            return JSON.stringify(row);
-          } catch (_) {
-            return String(row);
-          }
+      box.textContent = d.lines.map(fmtScrapeRow).join('\n\n');
+      box.scrollTop = 0;
+    } catch (e) {
+      box.textContent = e.message || String(e);
+    }
+  }
+
+  async function loadScrapeRuns() {
+    if (!isAdmin()) return;
+    const box = document.getElementById('scrape-log-box');
+    const meta = document.getElementById('scrape-log-meta');
+    if (!box) return;
+    box.textContent = '加载批次…';
+    const isbn = (document.getElementById('scrape-log-isbn') && document.getElementById('scrape-log-isbn').value.trim()) || '';
+    try {
+      const d = await api('/scrape-logs/runs?limit=30' + (isbn ? '&isbn=' + encodeURIComponent(isbn) : ''));
+      const runs = d.runs || [];
+      if (meta) meta.textContent = '最近刮削批次 ' + runs.length;
+      if (!runs.length) {
+        box.textContent = '暂无批次';
+        return;
+      }
+      box.textContent = runs
+        .map((r) => {
+          return (
+            String(r.started_at || '').replace('T', ' ').slice(0, 19) +
+            ' isbn=' +
+            (r.isbn || '-') +
+            ' events=' +
+            r.event_count +
+            ' ok=' +
+            r.end_ok +
+            '\n  run=' +
+            r.run_id +
+            '\n  ' +
+            (r.end_summary || r.end_meta || '') +
+            '\n  (点查库并在地址栏加 run_id 可滤此批；或复制 run_id)'
+          );
         })
-        .join('\n');
-      box.scrollTop = box.scrollHeight;
+        .join('\n\n');
+      scrapeLogRunId = runs[0] && runs[0].run_id ? runs[0].run_id : '';
     } catch (e) {
       box.textContent = e.message || String(e);
     }
@@ -2249,11 +2305,11 @@
 
   async function clearScrapeLogs() {
     if (!isAdmin()) return;
-    if (!confirm('确认清空当前选中的刮削日志文件？')) return;
-    const kind = (document.getElementById('scrape-log-kind') && document.getElementById('scrape-log-kind').value) || 'scrape';
+    if (!confirm('确认删除 7 天前的刮削日志？')) return;
     try {
-      await api('/scrape-logs?kind=' + encodeURIComponent(kind), { method: 'DELETE' });
-      toast('已清空');
+      const d = await api('/scrape-logs', { method: 'DELETE' });
+      toast('已删 ' + (d.deleted || 0) + ' 条');
+      scrapeLogRunId = '';
       loadScrapeLogs();
     } catch (e) {
       toast(e.message || '清空失败', true);
@@ -2394,6 +2450,7 @@
   window.createLib = createLib;
   window.loadAuditLogs = loadAuditLogs;
   window.loadScrapeLogs = loadScrapeLogs;
+  window.loadScrapeRuns = loadScrapeRuns;
   window.clearScrapeLogs = clearScrapeLogs;
   window.applyTheme = applyTheme;
   window.saveTheme = saveTheme;

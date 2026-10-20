@@ -5,8 +5,14 @@
  * - 进程内缓存 + 失败冷却，避免重复扣次
  */
 
-const fs = require('fs');
-const path = require('path');
+const {
+  redactUrl,
+  clip,
+  safeJson,
+  logScrape,
+  logHttp,
+  logSummary,
+} = require('./scrapeLog');
 
 const API =
   process.env.ISBN_WORK_API ||
@@ -15,44 +21,36 @@ const API =
 const CACHE_MS = Number(process.env.ISBN_WORK_CACHE_MS || 7 * 24 * 3600 * 1000);
 const FAIL_COOLDOWN_MS = Number(process.env.ISBN_WORK_FAIL_COOLDOWN_MS || 30 * 60 * 1000);
 const TIMEOUT_MS = Number(process.env.ISBN_WORK_TIMEOUT_MS || 6000);
-const BODY_MAX = Number(process.env.SCRAPE_LOG_BODY_MAX || 8000);
 
 const cache = new Map(); // isbn -> { at, meta, err }
 let cooldownUntil = 0;
 let lastError = null;
 
-const logDir = path.join(__dirname, '..', 'logs');
-if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
-const scrapeLog = fs.createWriteStream(path.join(logDir, 'scrape.log'), {
-  flags: 'a',
-  encoding: 'utf8',
-});
-const requestLog = fs.createWriteStream(path.join(logDir, 'requests.log'), {
-  flags: 'a',
-  encoding: 'utf8',
-});
-
-function redactUrl(url) {
-  return String(url || '').replace(/([?&](?:appKey|apikey|api_key|key)=)[^&]*/gi, '$1***');
-}
-
-function clip(s, max = BODY_MAX) {
-  const t = typeof s === 'string' ? s : JSON.stringify(s);
-  if (!t) return '';
-  if (t.length <= max) return t;
-  return t.slice(0, max) + `…[truncated ${t.length - max} chars, total ${t.length}]`;
-}
-
-function logLine(stream, obj) {
-  try {
-    stream.write(`${JSON.stringify({ ts: new Date().toISOString(), ...obj })}\n`);
-  } catch (_) {}
-}
-
 function logIw(event, payload = {}) {
-  const row = { event, provider: 'isbn-work', ...payload };
-  logLine(scrapeLog, row);
-  logLine(requestLog, row);
+  const row = { event, site: 'isbn-work', provider: 'isbn-work', ...payload };
+  logScrape(event, row);
+  if (payload.phase || payload.url) {
+    logHttp({
+      tag: 'isbn-work',
+      phase: payload.phase,
+      method: payload.method,
+      url: payload.url,
+      status: payload.status,
+      ok: payload.ok,
+      headers: payload.headers,
+      body: payload.body,
+      elapsed_ms: payload.elapsed_ms,
+      error: payload.error,
+      content_type: payload.content_type,
+    });
+  }
+  if (payload.summary || event === 'lookup_result' || event === 'fill_gaps') {
+    logSummary(
+      payload.summary ||
+        `isbn-work ${event} ok=${payload.ok} ${payload.error || payload.skipped || ''}`,
+      { site: 'isbn-work', ...payload }
+    );
+  }
 }
 
 function getAppKey() {

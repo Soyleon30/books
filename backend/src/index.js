@@ -1262,69 +1262,114 @@ app.get('/api/audit-logs/actions', adminRequired, async (_req, res) => {
   }
 });
 
-// ---------- scrape logs (admin): 请求/响应全文，便于排查封面刮削 ----------
-const SCRAPE_LOG_FILES = {
-  scrape: 'scrape.log',
-  requests: 'requests.log',
-};
-
-function readLogTail(filePath, { lines = 200, q = '' } = {}) {
-  if (!fs.existsSync(filePath)) {
-    return { exists: false, lines: [], total_lines: 0 };
-  }
-  const raw = fs.readFileSync(filePath, 'utf8');
-  let all = raw.split(/\r?\n/).filter((l) => l.trim());
-  const total = all.length;
-  if (q) {
-    const qq = q.toLowerCase();
-    all = all.filter((l) => l.toLowerCase().includes(qq));
-  }
-  const n = Math.min(Math.max(1, Number(lines) || 200), 2000);
-  const slice = all.slice(-n);
-  const parsed = slice.map((line) => {
-    try {
-      return JSON.parse(line);
-    } catch {
-      return { raw: line };
-    }
-  });
-  return { exists: true, lines: parsed, total_lines: total, returned: parsed.length };
-}
-
+// ---------- scrape logs (admin): 优先从 MySQL scrape_logs 查 ----------
 app.get('/api/scrape-logs', adminRequired, async (req, res) => {
   try {
-    const kind = String(req.query.kind || 'scrape').toLowerCase();
-    const name = SCRAPE_LOG_FILES[kind] || SCRAPE_LOG_FILES.scrape;
-    const filePath = path.join(SCRAPE_LOG_DIR, name);
-    const lines = Math.min(2000, Math.max(1, Number(req.query.lines || 200)));
+    const page = Math.max(1, Number(req.query.page || 1));
+    const pageSize = Math.min(200, Math.max(10, Number(req.query.page_size || req.query.lines || 50)));
+    const offset = (page - 1) * pageSize;
     const q = String(req.query.q || '').trim();
-    const result = readLogTail(filePath, { lines, q });
+    const isbn = String(req.query.isbn || '').trim();
+    const runId = String(req.query.run_id || '').trim();
+    const event = String(req.query.event || '').trim();
+    const site = String(req.query.site || '').trim();
+    const where = [];
+    const params = [];
+    if (isbn) {
+      where.push('isbn = ?');
+      params.push(isbn);
+    }
+    if (runId) {
+      where.push('run_id = ?');
+      params.push(runId);
+    }
+    if (event) {
+      where.push('event = ?');
+      params.push(event);
+    }
+    if (site) {
+      where.push('site = ?');
+      params.push(site);
+    }
+    if (q) {
+      where.push(
+        '(isbn LIKE ? OR run_id LIKE ? OR event LIKE ? OR site LIKE ? OR url LIKE ? OR summary LIKE ? OR error_text LIKE ? OR response_body LIKE ?)'
+      );
+      const like = '%' + q + '%';
+      params.push(like, like, like, like, like, like, like, like);
+    }
+    const wh = where.length ? 'WHERE ' + where.join(' AND ') : '';
+    const [cntRows] = await pool.query(`SELECT COUNT(*) AS c FROM scrape_logs ${wh}`, params);
+    const total = Number(cntRows[0].c);
+    const [rows] = await pool.query(
+      `SELECT id, run_id, isbn, event, site, phase, ok, http_status, url,
+              request_json, response_json, response_body, meta_json, error_text,
+              elapsed_ms, summary, created_at
+       FROM scrape_logs ${wh}
+       ORDER BY id DESC
+       LIMIT ? OFFSET ?`,
+      [...params, pageSize, offset]
+    );
+    const lines = rows.map((r) => ({
+      id: r.id,
+      ts: r.created_at,
+      run_id: r.run_id,
+      isbn: r.isbn,
+      event: r.event,
+      site: r.site,
+      phase: r.phase,
+      ok: r.ok,
+      http_status: r.http_status,
+      url: r.url,
+      request: r.request_json,
+      response: r.response_json,
+      body: r.response_body,
+      meta: r.meta_json,
+      error: r.error_text,
+      elapsed_ms: r.elapsed_ms,
+      summary: r.summary,
+    }));
     res.json({
-      kind: SCRAPE_LOG_FILES[kind] ? kind : 'scrape',
-      file: name,
-      path: filePath,
-      ...result,
+      source: 'mysql',
+      table: 'scrape_logs',
+      page,
+      page_size: pageSize,
+      total,
+      total_pages: Math.max(1, Math.ceil(total / pageSize) || 1),
+      returned: lines.length,
+      lines,
     });
   } catch (e) {
     res.status(500).json({ error: e.message || String(e) });
   }
 });
 
-app.get('/api/scrape-logs/files', adminRequired, async (_req, res) => {
+app.get('/api/scrape-logs/runs', adminRequired, async (req, res) => {
   try {
-    const files = [];
-    for (const [kind, name] of Object.entries(SCRAPE_LOG_FILES)) {
-      const p = path.join(SCRAPE_LOG_DIR, name);
-      let size = 0;
-      let mtime = null;
-      if (fs.existsSync(p)) {
-        const st = fs.statSync(p);
-        size = st.size;
-        mtime = st.mtime.toISOString();
-      }
-      files.push({ kind, name, path: p, size, mtime, exists: fs.existsSync(p) });
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit || 30)));
+    const isbn = String(req.query.isbn || '').trim();
+    const params = [];
+    let wh = '';
+    if (isbn) {
+      wh = 'WHERE isbn = ?';
+      params.push(isbn);
     }
-    res.json({ dir: SCRAPE_LOG_DIR, files });
+    const [rows] = await pool.query(
+      `SELECT run_id, isbn,
+              MIN(created_at) AS started_at,
+              MAX(created_at) AS ended_at,
+              COUNT(*) AS event_count,
+              MAX(CASE WHEN event='scrape_end' THEN meta_json END) AS end_meta,
+              MAX(CASE WHEN event='scrape_end' THEN summary END) AS end_summary,
+              MAX(CASE WHEN event='scrape_end' THEN ok END) AS end_ok
+       FROM scrape_logs
+       ${wh}
+       GROUP BY run_id, isbn
+       ORDER BY MAX(id) DESC
+       LIMIT ?`,
+      [...params, limit]
+    );
+    res.json({ runs: rows });
   } catch (e) {
     res.status(500).json({ error: e.message || String(e) });
   }
@@ -1332,20 +1377,29 @@ app.get('/api/scrape-logs/files', adminRequired, async (_req, res) => {
 
 app.delete('/api/scrape-logs', adminRequired, async (req, res) => {
   try {
-    const kind = String(req.query.kind || 'all').toLowerCase();
-    const cleared = [];
-    const targets =
-      kind === 'all'
-        ? Object.values(SCRAPE_LOG_FILES)
-        : [SCRAPE_LOG_FILES[kind]].filter(Boolean);
-    for (const name of targets) {
-      const p = path.join(SCRAPE_LOG_DIR, name);
-      if (fs.existsSync(p)) {
-        fs.writeFileSync(p, '', 'utf8');
-        cleared.push(name);
-      }
+    const isbn = String(req.query.isbn || '').trim();
+    const runId = String(req.query.run_id || '').trim();
+    const days = Number(req.query.days || 0);
+    if (runId) {
+      const [r] = await pool.query(`DELETE FROM scrape_logs WHERE run_id = ?`, [runId]);
+      return res.json({ message: 'cleared', deleted: r.affectedRows, by: 'run_id' });
     }
-    res.json({ message: 'cleared', cleared });
+    if (isbn) {
+      const [r] = await pool.query(`DELETE FROM scrape_logs WHERE isbn = ?`, [isbn]);
+      return res.json({ message: 'cleared', deleted: r.affectedRows, by: 'isbn' });
+    }
+    if (days > 0) {
+      const [r] = await pool.query(
+        `DELETE FROM scrape_logs WHERE created_at < DATE_SUB(NOW(), INTERVAL ? DAY)`,
+        [days]
+      );
+      return res.json({ message: 'cleared', deleted: r.affectedRows, by: 'days', days });
+    }
+    // 默认只清 7 天前，防误删全部
+    const [r] = await pool.query(
+      `DELETE FROM scrape_logs WHERE created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)`
+    );
+    res.json({ message: 'cleared old (>7d)', deleted: r.affectedRows });
   } catch (e) {
     res.status(500).json({ error: e.message || String(e) });
   }
