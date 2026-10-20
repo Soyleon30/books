@@ -5,6 +5,8 @@ node_modules/
 *.log
 backend/logs/*
 !backend/logs/.gitkeep
+backend/data/covers/*
+!backend/data/covers/.gitkeep
 dist/
 *.tar
 *.tar.gz

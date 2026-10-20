@@ -1,6 +1,12 @@
 const crypto = require('crypto');
 const isbnWork = require('./isbnWork');
 const {
+  isPlaceholderUrl,
+  fetchCoverCandidate,
+  saveCover,
+  localCoverPath,
+} = require('./coverStore');
+const {
   redactUrl,
   clip,
   safeJson,
@@ -32,23 +38,14 @@ function pick(...vals) {
   return null;
 }
 
-/** 过滤豆瓣/占位图、无效封面 */
+/** 过滤豆瓣/占位图、无效封面 URL */
 function cleanCover(url) {
   if (!url) return null;
   let u = String(url).trim().replace(/^http:\/\//i, 'https://');
+  // 已是本站封面
+  if (u.startsWith('/api/covers/')) return u;
   if (!/^https?:\/\//i.test(u)) return null;
-  const low = u.toLowerCase();
-  if (
-    low.includes('book-default') ||
-    low.includes('default-lpic') ||
-    low.includes('default_cover') ||
-    low.includes('no-cover') ||
-    low.includes('nocover') ||
-    low.includes('placeholder') ||
-    (low.endsWith('.gif') && low.includes('default'))
-  ) {
-    return null;
-  }
+  if (isPlaceholderUrl(u)) return null;
   u = u.replace(/\/view\/subject\/s\//, '/view/subject/l/');
   u = u.replace(/\/spic\//, '/lpic/');
   return u;
@@ -142,87 +139,85 @@ async function fetchJson(url, timeoutMs = 8000, tag = 'fetch-json') {
   }
 }
 
-async function probeCover(url, timeoutMs = 4000) {
+/**
+ * 下载并评分封面；返回 { url, local, candidate } 或 null
+ * 坏图/占位图 → null（调用方应换源）
+ */
+async function probeCover(url, timeoutMs = 8000, isbn = null) {
   const u = cleanCover(url);
   if (!u) {
-    logScrape('probe_cover', { in: url, cleaned: null, result: 'rejected_by_cleanCover' });
+    logScrape('probe_cover', {
+      in: url,
+      cleaned: null,
+      result: null,
+      reason: 'rejected_by_cleanCover',
+    });
     return null;
   }
+  if (u.startsWith('/api/covers/')) {
+    return { url: u, local: u, candidate: { ok: true, reason: 'already_local' } };
+  }
   const t0 = Date.now();
-  const reqHeaders = {
-    'User-Agent':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    Accept: 'image/*,*/*',
-    Referer: 'https://book.douban.com/',
-  };
   logHttp({
     phase: 'request',
     tag: 'probe-cover',
     method: 'GET',
     url: redactUrl(u),
     timeout_ms: timeoutMs,
-    headers: reqHeaders,
   });
-  try {
-    const res = await fetch(u, {
-      method: 'GET',
-      signal: AbortSignal.timeout(timeoutMs),
-      headers: reqHeaders,
+  const cand = await fetchCoverCandidate(u, timeoutMs);
+  logHttp({
+    phase: cand.ok ? 'response' : 'error',
+    tag: 'probe-cover',
+    method: 'GET',
+    url: redactUrl(u),
+    status: cand.ok ? 200 : null,
+    ok: !!cand.ok,
+    content_type: cand.contentType || null,
+    body_len: cand.bytes || 0,
+    elapsed_ms: Date.now() - t0,
+    probe_ok: !!cand.ok,
+    reason: cand.reason,
+    score: cand.score,
+    dim: cand.w && cand.h ? `${cand.w}x${cand.h}` : null,
+  });
+  logScrape('probe_cover', {
+    in: url,
+    cleaned: u,
+    ok: !!cand.ok,
+    reason: cand.reason,
+    bytes: cand.bytes,
+    score: cand.score,
+    w: cand.w,
+    h: cand.h,
+    md5: cand.md5,
+  });
+  if (!cand.ok || !cand.buf) return null;
+  let local = null;
+  if (isbn) {
+    local = saveCover(isbn, cand.buf, cand.contentType, u);
+    logScrape('cover_saved', {
+      isbn,
+      src: redactUrl(u),
+      local,
+      bytes: cand.bytes,
+      score: cand.score,
+      reason: cand.reason,
     });
-    const ct = String(res.headers.get('content-type') || '');
-    let bufLen = 0;
-    let ok = false;
-    let reason = null;
-    if (!res.ok) {
-      reason = `http_${res.status}`;
-    } else if (ct && !ct.includes('image') && !ct.includes('octet-stream')) {
-      reason = `bad_content_type:${ct}`;
-    } else {
-      const buf = Buffer.from(await res.arrayBuffer());
-      bufLen = buf.length;
-      if (buf.length < 1500) reason = `too_small:${buf.length}`;
-      else ok = true;
-    }
-    logHttp({
-      phase: 'response',
-      tag: 'probe-cover',
-      method: 'GET',
-      url: redactUrl(u),
-      status: res.status,
-      ok: res.ok,
-      content_type: ct,
-      body_len: bufLen,
-      elapsed_ms: Date.now() - t0,
-      probe_ok: ok,
-      reason,
-    });
-    logScrape('probe_cover', {
-      in: url,
-      cleaned: u,
-      status: res.status,
-      content_type: ct,
-      bytes: bufLen,
-      result: ok ? u : null,
-      reason,
-    });
-    return ok ? u : null;
-  } catch (e) {
-    logHttp({
-      phase: 'error',
-      tag: 'probe-cover',
-      method: 'GET',
-      url: redactUrl(u),
-      elapsed_ms: Date.now() - t0,
-      error: e.message || String(e),
-    });
-    logScrape('probe_cover', {
-      in: url,
-      cleaned: u,
-      result: null,
-      error: e.message || String(e),
-    });
-    return null;
   }
+  return { url: local || u, local, remote: u, candidate: cand };
+}
+
+/** 从多个候选 URL 里选最好的真封面并落盘 */
+async function pickBestCover(urls, isbn) {
+  const list = [...new Set((urls || []).map(cleanCover).filter(Boolean))];
+  let best = null;
+  for (const u of list) {
+    const r = await probeCover(u, 8000, isbn);
+    if (!r || !r.candidate || !r.candidate.ok) continue;
+    if (!best || (r.candidate.score || 0) > (best.candidate.score || 0)) best = r;
+  }
+  return best;
 }
 
 async function fromOpenLibrary(isbn) {
@@ -786,72 +781,88 @@ async function _fetchBookMetaDetailedInner(isbn, clean, runId) {
     }
   }
 
-  // 免费源缺书名或缺封面 → 立刻用 isbn.work
-  await applyIsbnWork('after_free');
+  // 收集各免费源封面候选
+  const coverCandidates = [];
+  for (const p of freeResults) {
+    if (p && p.cover) coverCandidates.push(p.cover);
+  }
 
-  if (meta && meta.cover) {
-    const coverIn = meta.cover;
-    const okCover = await probeCover(meta.cover);
-    debug.cover_checked = okCover ? 'ok' : 'bad';
-    if (okCover) {
-      meta.cover = okCover;
-    } else {
-      // 探测失败：丢掉坏封面，再用 isbn.work 补
-      meta.cover = null;
-      logSummary(`  COVER probe FAIL drop_url=${coverIn} -> isbn.work`, {
-        isbn: clean,
-        site: 'probe-cover',
-        ok: false,
-      });
-      await applyIsbnWork('after_bad_cover');
-      if (meta && meta.cover) {
-        const again = await probeCover(meta.cover);
-        debug.cover_checked = again ? 'ok_after_isbn_work' : 'bad_after_isbn_work';
-        if (again) meta.cover = again;
-      }
+  // 免费源缺书名或缺封面 → isbn.work
+  await applyIsbnWork('after_free');
+  if (meta && meta.cover) coverCandidates.push(meta.cover);
+
+  // 下载+评分；占位/坏图淘汰；最好的落盘成本站路径
+  let coverPick = await pickBestCover(coverCandidates, clean);
+  if (!coverPick) {
+    logSummary(`  COVER all candidates bad/empty -> isbn.work`, {
+      isbn: clean,
+      site: 'probe-cover',
+      ok: false,
+    });
+    if (meta) meta.cover = null;
+    await applyIsbnWork('after_bad_cover');
+    if (meta && meta.cover) {
+      coverPick = await probeCover(meta.cover, 8000, clean);
     }
+  }
+
+  if (coverPick && coverPick.url) {
+    if (meta) meta.cover = coverPick.url;
+    else {
+      meta = {
+        title: '未知书名',
+        authors: '未知作者',
+        cover: coverPick.url,
+        source: 'cover-only',
+      };
+    }
+    debug.cover_checked = coverPick.candidate && coverPick.candidate.reason
+      ? coverPick.candidate.reason
+      : 'ok';
+    debug.cover_local = coverPick.local || null;
+    debug.cover_remote = coverPick.remote || null;
     debug.sites.push({
-      site: 'probe-cover',
-      ok: !!meta.cover && String(debug.cover_checked || '').startsWith('ok'),
-      in: coverIn,
-      out: meta && meta.cover,
-      checked: debug.cover_checked,
+      site: 'cover-store',
+      ok: true,
+      local: coverPick.local,
+      remote: coverPick.remote,
+      score: coverPick.candidate && coverPick.candidate.score,
+      reason: coverPick.candidate && coverPick.candidate.reason,
+      w: coverPick.candidate && coverPick.candidate.w,
+      h: coverPick.candidate && coverPick.candidate.h,
+      bytes: coverPick.candidate && coverPick.candidate.bytes,
     });
     logScrape('cover_final', {
       isbn: clean,
-      site: 'probe-cover',
-      in: coverIn,
-      out: meta && meta.cover,
-      checked: debug.cover_checked,
-      ok: !!(meta && meta.cover),
-      summary: `COVER checked=${debug.cover_checked} url=${meta && meta.cover}`,
+      site: 'cover-store',
+      ok: true,
+      out: meta.cover,
+      local: coverPick.local,
+      remote: coverPick.remote,
+      score: coverPick.candidate && coverPick.candidate.score,
+      reason: coverPick.candidate && coverPick.candidate.reason,
+      summary: `COVER local=${coverPick.local || meta.cover} score=${coverPick.candidate && coverPick.candidate.score}`,
     });
-    logSummary(`  COVER final=${meta && meta.cover} checked=${debug.cover_checked}`, {
-      isbn: clean,
-      site: 'probe-cover',
-      ok: !!(meta && meta.cover),
-    });
+    logSummary(
+      `  COVER saved ${meta.cover} score=${coverPick.candidate && coverPick.candidate.score} ${coverPick.candidate && coverPick.candidate.w}x${coverPick.candidate && coverPick.candidate.h}`,
+      { isbn: clean, site: 'cover-store', ok: true, meta }
+    );
   } else {
-    // 免费源完全没封面 → isbn.work 已在 after_free 试过；再确认一次
-    if (!meta || !meta.cover) await applyIsbnWork('no_cover');
-    debug.sites.push({
-      site: 'probe-cover',
-      ok: !!(meta && meta.cover),
-      reason: meta && meta.cover ? 'filled_by_isbn_work' : 'no_cover',
-    });
+    if (meta) meta.cover = localCoverPath(clean) || null;
+    debug.cover_checked = 'none';
+    debug.sites.push({ site: 'cover-store', ok: false, reason: 'no_good_cover' });
     logScrape('cover_final', {
       isbn: clean,
-      site: 'probe-cover',
-      in: null,
+      site: 'cover-store',
+      ok: false,
       out: meta && meta.cover,
-      checked: meta && meta.cover ? 'from_isbn_work' : 'skip_no_cover',
-      ok: !!(meta && meta.cover),
-      summary: meta && meta.cover ? `COVER from_isbn_work ${meta.cover}` : 'COVER none',
+      reason: 'no_good_cover',
+      summary: 'COVER none (placeholder/bad rejected)',
     });
-    logSummary(`  COVER ${meta && meta.cover ? meta.cover : 'none'}`, {
+    logSummary(`  COVER none (占位/坏图已拒绝)`, {
       isbn: clean,
-      site: 'probe-cover',
-      ok: !!(meta && meta.cover),
+      site: 'cover-store',
+      ok: false,
     });
   }
 
@@ -893,6 +904,7 @@ module.exports = {
   fetchBookMetaDetailed,
   cleanCover,
   probeCover,
+  pickBestCover,
   isbnWork,
   logScrape,
   logHttp,

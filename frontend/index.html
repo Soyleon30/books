@@ -513,13 +513,18 @@
   function isbn(s) { return String(s || '').replace(/[^0-9Xx]/g, '').toUpperCase(); }
   function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
   function cover(u) {
-    return u || 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="100"><rect fill="#6b7280" width="80" height="100"/><text x="40" y="55" text-anchor="middle" fill="#fff" font-size="14">Book</text></svg>');
+    if (!u) {
+      return 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="100"><rect fill="#6b7280" width="80" height="100"/><text x="40" y="55" text-anchor="middle" fill="#fff" font-size="14">Book</text></svg>');
+    }
+    // 本站已下载封面
+    if (String(u).startsWith('/api/covers/')) return u;
+    return u;
   }
   function coverImg(u, w, h, extra) {
     const src = cover(u);
     const ww = w || 56;
     const hh = h || 72;
-    // 豆瓣等图床常拦 Referer，去掉 referrer 才能显示
+    const local = String(u || '').startsWith('/api/covers/');
     return (
       '<img src="' +
       src +
@@ -529,6 +534,7 @@
       hh +
       '" referrerpolicy="no-referrer" loading="lazy" style="object-fit:cover;border-radius:8px;background:var(--line)" onerror="this.style.opacity=.25"' +
       (extra || '') +
+      (local ? ' data-local="1"' : '') +
       '>'
     );
   }

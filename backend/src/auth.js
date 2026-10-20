@@ -84,6 +84,10 @@ function publicPath(req) {
   if (req.method === 'GET' && (p === '/api/health' || p === '/health' || p.endsWith('/health'))) {
     return true;
   }
+  // 封面静态图：列表/弹窗直接 img src，无需登录
+  if (req.method === 'GET' && (p.startsWith('/api/covers/') || p.includes('/covers/'))) {
+    return true;
+  }
   if (req.method === 'POST' && (p === '/api/auth/login' || p === '/auth/login' || p.endsWith('/auth/login'))) {
     return true;
   }

@@ -34,12 +34,18 @@ foreach ($pat in $dropFiles) {
     ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
 }
 
-# keep empty logs dir for volume mount
-$logsDir = Join-Path $Stage 'backend\logs'
-New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
-if (-not (Test-Path -LiteralPath (Join-Path $logsDir '.gitkeep'))) {
-  Set-Content -LiteralPath (Join-Path $logsDir '.gitkeep') -Value '' -Encoding ascii
+# keep empty logs/covers dirs for volume mount
+foreach ($rel in @('backend\logs', 'backend\data\covers')) {
+  $d = Join-Path $Stage $rel
+  New-Item -ItemType Directory -Force -Path $d | Out-Null
+  if (-not (Test-Path -LiteralPath (Join-Path $d '.gitkeep'))) {
+    Set-Content -LiteralPath (Join-Path $d '.gitkeep') -Value '' -Encoding ascii
+  }
 }
+# do not ship downloaded cover binaries
+Get-ChildItem -LiteralPath (Join-Path $Stage 'backend\data\covers') -File -ErrorAction SilentlyContinue |
+  Where-Object { $_.Name -ne '.gitkeep' } |
+  ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
 
 $must = @(
   'backend\Dockerfile',

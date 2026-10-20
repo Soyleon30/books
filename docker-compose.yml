@@ -21,6 +21,7 @@ services:
       - "${API_PORT:-3000}:3000"
     volumes:
       - ./backend/logs:/app/logs
+      - ./backend/data/covers:/app/data/covers
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

@@ -18,13 +18,25 @@ const {
   ensureDefaultAdmin,
 } = require('./auth');
 
+const { resolveCoverFile, COVER_DIR } = require('./coverStore');
+
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const SCRAPE_LOG_DIR = path.join(__dirname, '..', 'logs');
 if (!fs.existsSync(SCRAPE_LOG_DIR)) fs.mkdirSync(SCRAPE_LOG_DIR, { recursive: true });
+if (!fs.existsSync(COVER_DIR)) fs.mkdirSync(COVER_DIR, { recursive: true });
 
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
+
+// 本地下载的封面（公开）
+app.get('/api/covers/:name', (req, res) => {
+  const full = resolveCoverFile(req.params.name);
+  if (!full) return res.status(404).json({ error: 'no cover' });
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  return res.sendFile(full);
+});
+
 app.use(authRequired);
 
 
