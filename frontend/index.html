@@ -141,10 +141,35 @@
     body{margin:0;font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text)}
     .wrap{max-width:28rem;margin:0 auto;min-height:100vh;background:var(--surface);display:flex;flex-direction:column}
     .hdr{background:var(--primary);color:var(--on-primary);padding:12px 14px}
-    .hdr-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+    .hdr-top{display:flex;flex-direction:column;gap:10px;margin-bottom:10px}
+    .hdr-brand{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
     .title{font-size:18px;font-weight:700;margin:0}.sub{font-size:11px;opacity:.88;margin:2px 0 0}
-    .tabs button{border:0;background:transparent;color:var(--on-primary);padding:4px 10px;border-radius:999px;font-size:13px}
-    .tabs button.on{background:rgba(255,255,255,.18)}
+    .tabs{
+      display:flex;align-items:center;gap:6px;width:100%;
+      flex-wrap:nowrap;
+    }
+    .tabs-main{
+      flex:1;min-width:0;display:flex;align-items:center;gap:4px;
+      overflow-x:auto;-webkit-overflow-scrolling:touch;
+      scrollbar-width:none;
+    }
+    .tabs-main::-webkit-scrollbar{display:none}
+    .tabs button{
+      border:0;background:transparent;color:var(--on-primary);
+      padding:8px 12px;border-radius:999px;font-size:14px;font-weight:600;
+      white-space:nowrap;cursor:pointer;flex:0 0 auto;
+      -webkit-tap-highlight-color:transparent;touch-action:manipulation;
+    }
+    .tabs button.on{background:rgba(255,255,255,.22)}
+    .tabs-scan{
+      flex:0 0 auto;margin-left:4px;padding-left:6px;
+      border-left:1px solid rgba(255,255,255,.22);
+    }
+    .tabs-scan button{
+      padding:9px 16px;font-size:15px;font-weight:800;
+      background:rgba(255,255,255,.16);
+    }
+    .tabs-scan button.on{background:rgba(255,255,255,.32)}
     .lib{display:flex;gap:8px;align-items:center;background:rgba(255,255,255,.14);border-radius:14px;padding:8px 12px}
     .lib select{flex:1;border:0;background:transparent;color:var(--on-primary);font-size:13px;outline:0}.lib option{color:var(--text)}
     .pane{flex:1;padding:14px;overflow:auto}.hide{display:none!important}
@@ -217,15 +242,21 @@
 <div id="app-page" class="wrap hide">
   <div class="hdr">
     <div class="hdr-top">
-      <div><p class="title">图书管理</p><p class="sub">ISBN 扫码 · 图书管理</p></div>
+      <div class="hdr-brand">
+        <div><p class="title">图书管理</p><p class="sub">ISBN 扫码 · 图书管理</p></div>
+      </div>
       <div class="tabs">
-        <button type="button" class="on" id="t0" onclick="showTab(0)">扫描</button>
-        <button type="button" id="t1" onclick="showTab(1)">藏书</button>
-        <button type="button" id="t2" onclick="showTab(2)">馆</button>
-        <button type="button" id="t3" onclick="showTab(3)">账号</button>
-        <button type="button" id="t4" class="hide" onclick="showTab(4)">群组</button>
-        <button type="button" id="t5" class="hide" onclick="showTab(5)">审计</button>
-        <button type="button" id="t6" class="hide" onclick="showTab(6)">刮削</button>
+        <div class="tabs-main">
+          <button type="button" id="t1" onclick="showTab(1)">藏书</button>
+          <button type="button" id="t2" onclick="showTab(2)">馆</button>
+          <button type="button" id="t3" onclick="showTab(3)">账号</button>
+          <button type="button" id="t4" class="hide" onclick="showTab(4)">群组</button>
+          <button type="button" id="t5" class="hide" onclick="showTab(5)">审计</button>
+          <button type="button" id="t6" class="hide" onclick="showTab(6)">刮削</button>
+        </div>
+        <div class="tabs-scan">
+          <button type="button" class="on" id="t0" onclick="showTab(0)">扫描</button>
+        </div>
       </div>
     </div>
     <div class="lib">
