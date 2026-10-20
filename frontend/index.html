@@ -598,9 +598,10 @@
     if (!u) {
       return 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="100"><rect fill="#6b7280" width="80" height="100"/><text x="40" y="55" text-anchor="middle" fill="#fff" font-size="14">Book</text></svg>');
     }
-    // 本站已下载封面
-    if (String(u).startsWith('/api/covers/')) return u;
-    return u;
+    const s = String(u);
+    // 本站封面（DB/磁盘），相对路径即可
+    if (s.startsWith('/api/covers/')) return s;
+    return s;
   }
   function coverImg(u, w, h, extra) {
     const src = cover(u);
@@ -1329,6 +1330,12 @@
       localStorage.removeItem(LS);
     }
     st(libId ? ('当前：' + libName()) : '请选择图书馆', libId ? 'ok' : 'warn');
+    autoSearchIfBooksTab();
+  }
+
+  function autoSearchIfBooksTab() {
+    const p1 = document.getElementById('p1');
+    if (p1 && !p1.classList.contains('hide') && libId) search();
   }
 
   function onLib() {
@@ -1338,6 +1345,8 @@
     else localStorage.removeItem(LS);
     stop();
     st(libId ? ('当前：' + libName()) : '请选择', libId ? 'ok' : 'warn');
+    // 藏书页：换馆后自动搜索，不必再点
+    autoSearchIfBooksTab();
   }
 
   async function loadLibs() {

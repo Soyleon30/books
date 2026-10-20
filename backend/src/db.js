@@ -290,6 +290,22 @@ async function initDb() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
 
+    // 封面二进制（不依赖容器磁盘，PaaS 无 volume 也能显示）
+    try {
+      await conn.query(`
+        CREATE TABLE IF NOT EXISTS book_covers (
+          isbn VARCHAR(32) NOT NULL PRIMARY KEY,
+          mime VARCHAR(64) NOT NULL DEFAULT 'image/jpeg',
+          bytes INT UNSIGNED NOT NULL DEFAULT 0,
+          data LONGBLOB NOT NULL,
+          source_url VARCHAR(1024) NULL,
+          updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+    } catch (e) {
+      console.error('[initDb] book_covers table:', e.message || e);
+    }
+
     // 刮削全程日志（失败不阻断启动）
     try {
       await conn.query(`

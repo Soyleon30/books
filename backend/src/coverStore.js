@@ -196,35 +196,78 @@ async function fetchCoverCandidate(url, timeoutMs = 8000) {
   }
 }
 
+function getPool() {
+  try {
+    return require('./db').pool;
+  } catch (_) {
+    return null;
+  }
+}
+
+function mimeFromCt(ct, url) {
+  const c = String(ct || '').toLowerCase();
+  if (c.includes('png')) return 'image/png';
+  if (c.includes('webp')) return 'image/webp';
+  if (c.includes('gif')) return 'image/gif';
+  if (c.includes('jpeg') || c.includes('jpg')) return 'image/jpeg';
+  const ext = extFromCt(ct, url);
+  if (ext === '.png') return 'image/png';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.gif') return 'image/gif';
+  return 'image/jpeg';
+}
+
 /**
- * 保存到本地，返回对外路径 /api/covers/{isbn}.jpg
+ * 优先写入 MySQL book_covers；同时尝试写本地缓存。
+ * 返回对外路径 /api/covers/{isbn}
  */
-function saveCover(isbn, buf, contentType, srcUrl) {
+async function saveCover(isbn, buf, contentType, srcUrl) {
   const key = String(isbn || '')
     .replace(/[^0-9Xx]/g, '')
     .toUpperCase();
   if (!key || !buf || !buf.length) return null;
-  if (!ensureCoverDir()) return null;
-  const ext = extFromCt(contentType, srcUrl);
-  const name = `${key}${ext}`;
-  const full = path.join(COVER_DIR, name);
-  try {
-    fs.writeFileSync(full, buf);
-  } catch (e) {
-    console.error('[coverStore] write failed', full, e.message || e);
-    return null;
-  }
-  // 清掉同 isbn 其它后缀
-  for (const e of ['.jpg', '.jpeg', '.png', '.webp', '.gif']) {
-    if (e === ext) continue;
-    const other = path.join(COVER_DIR, `${key}${e}`);
-    if (fs.existsSync(other)) {
-      try {
-        fs.unlinkSync(other);
-      } catch (_) {}
+  const mime = mimeFromCt(contentType, srcUrl);
+  const publicPath = `/api/covers/${key}`;
+
+  // 1) DB（主存储，PaaS 无 volume 也能用）
+  const pool = getPool();
+  if (pool) {
+    try {
+      await pool.query(
+        `INSERT INTO book_covers (isbn, mime, bytes, data, source_url)
+         VALUES (?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE mime=VALUES(mime), bytes=VALUES(bytes), data=VALUES(data),
+           source_url=VALUES(source_url), updated_at=CURRENT_TIMESTAMP`,
+        [key, mime, buf.length, buf, srcUrl ? String(srcUrl).slice(0, 1024) : null]
+      );
+    } catch (e) {
+      console.error('[coverStore] db save failed', e.message || e);
+      // 继续尝试磁盘
     }
   }
-  return `/api/covers/${name}`;
+
+  // 2) 本地缓存（可选）
+  if (ensureCoverDir()) {
+    const ext = extFromCt(contentType, srcUrl);
+    const name = `${key}${ext}`;
+    const full = path.join(COVER_DIR, name);
+    try {
+      fs.writeFileSync(full, buf);
+      for (const e of ['.jpg', '.jpeg', '.png', '.webp', '.gif']) {
+        if (e === ext) continue;
+        const other = path.join(COVER_DIR, `${key}${e}`);
+        if (fs.existsSync(other)) {
+          try {
+            fs.unlinkSync(other);
+          } catch (_) {}
+        }
+      }
+    } catch (e) {
+      console.error('[coverStore] disk save failed', e.message || e);
+    }
+  }
+
+  return publicPath;
 }
 
 function localCoverPath(isbn) {
@@ -232,19 +275,40 @@ function localCoverPath(isbn) {
     .replace(/[^0-9Xx]/g, '')
     .toUpperCase();
   if (!key) return null;
-  for (const e of ['.jpg', '.jpeg', '.png', '.webp']) {
-    const full = path.join(COVER_DIR, `${key}${e}`);
-    if (fs.existsSync(full)) return `/api/covers/${key}${e}`;
-  }
-  return null;
+  return `/api/covers/${key}`;
 }
 
 function resolveCoverFile(name) {
   const base = path.basename(String(name || ''));
-  if (!/^[0-9Xx]{10,13}\.(jpe?g|png|webp|gif)$/i.test(base)) return null;
-  const full = path.join(COVER_DIR, base);
-  if (!fs.existsSync(full)) return null;
-  return full;
+  // 兼容旧路径 xxx.jpg 与新路径纯 isbn
+  const m = base.match(/^([0-9Xx]{10,13})(?:\.(jpe?g|png|webp|gif))?$/i);
+  if (!m) return null;
+  const key = m[1].toUpperCase();
+  for (const e of ['.jpg', '.jpeg', '.png', '.webp', '.gif']) {
+    const full = path.join(COVER_DIR, `${key}${e}`);
+    if (fs.existsSync(full)) return full;
+  }
+  return null;
+}
+
+async function loadCoverFromDb(isbn) {
+  const key = String(isbn || '')
+    .replace(/[^0-9Xx]/g, '')
+    .toUpperCase();
+  if (!key) return null;
+  const pool = getPool();
+  if (!pool) return null;
+  try {
+    const [rows] = await pool.query(
+      `SELECT mime, data, bytes FROM book_covers WHERE isbn = ? LIMIT 1`,
+      [key]
+    );
+    if (!rows.length || !rows[0].data) return null;
+    return { mime: rows[0].mime || 'image/jpeg', data: rows[0].data, bytes: rows[0].bytes };
+  } catch (e) {
+    console.error('[coverStore] db load failed', e.message || e);
+    return null;
+  }
 }
 
 module.exports = {
@@ -255,5 +319,6 @@ module.exports = {
   saveCover,
   localCoverPath,
   resolveCoverFile,
+  loadCoverFromDb,
   MIN_BYTES,
 };

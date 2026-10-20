@@ -18,7 +18,7 @@ const {
   ensureDefaultAdmin,
 } = require('./auth');
 
-const { resolveCoverFile, COVER_DIR } = require('./coverStore');
+const { resolveCoverFile, COVER_DIR, loadCoverFromDb } = require('./coverStore');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -37,13 +37,22 @@ try {
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
-// 本地下载的封面（公开，放在 auth 之前）
-app.get('/api/covers/:name', (req, res) => {
+// 封面：优先磁盘缓存，否则 MySQL book_covers（公开，auth 之前）
+app.get('/api/covers/:name', async (req, res) => {
   try {
-    const full = resolveCoverFile(req.params.name);
-    if (!full) return res.status(404).end();
+    const name = String(req.params.name || '');
+    const full = resolveCoverFile(name);
+    if (full) {
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      return res.sendFile(path.resolve(full));
+    }
+    const isbn = name.replace(/\.(jpe?g|png|webp|gif)$/i, '');
+    const row = await loadCoverFromDb(isbn);
+    if (!row || !row.data) return res.status(404).end();
+    res.setHeader('Content-Type', row.mime || 'image/jpeg');
     res.setHeader('Cache-Control', 'public, max-age=86400');
-    return res.sendFile(path.resolve(full));
+    res.setHeader('Content-Length', row.data.length);
+    return res.end(row.data);
   } catch (e) {
     console.error('[covers]', e.message || e);
     return res.status(500).end();

@@ -195,7 +195,12 @@ async function probeCover(url, timeoutMs = 8000, isbn = null) {
   if (!cand.ok || !cand.buf) return null;
   let local = null;
   if (isbn) {
-    local = saveCover(isbn, cand.buf, cand.contentType, u);
+    try {
+      local = await saveCover(isbn, cand.buf, cand.contentType, u);
+    } catch (e) {
+      logScrape('cover_saved', { isbn, ok: false, error: e.message || String(e) });
+      local = null;
+    }
     logScrape('cover_saved', {
       isbn,
       src: redactUrl(u),
@@ -203,6 +208,7 @@ async function probeCover(url, timeoutMs = 8000, isbn = null) {
       bytes: cand.bytes,
       score: cand.score,
       reason: cand.reason,
+      ok: !!local,
     });
   }
   return { url: local || u, local, remote: u, candidate: cand };
