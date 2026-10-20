@@ -1273,6 +1273,7 @@ app.get('/api/scrape-logs', adminRequired, async (req, res) => {
     const runId = String(req.query.run_id || '').trim();
     const event = String(req.query.event || '').trim();
     const site = String(req.query.site || '').trim();
+    const orderAsc = String(req.query.order || '').toLowerCase() === 'asc';
     const where = [];
     const params = [];
     if (isbn) {
@@ -1299,6 +1300,7 @@ app.get('/api/scrape-logs', adminRequired, async (req, res) => {
       params.push(like, like, like, like, like, like, like, like);
     }
     const wh = where.length ? 'WHERE ' + where.join(' AND ') : '';
+    const orderSql = orderAsc ? 'ORDER BY id ASC' : 'ORDER BY id DESC';
     const [cntRows] = await pool.query(`SELECT COUNT(*) AS c FROM scrape_logs ${wh}`, params);
     const total = Number(cntRows[0].c);
     const [rows] = await pool.query(
@@ -1306,7 +1308,7 @@ app.get('/api/scrape-logs', adminRequired, async (req, res) => {
               request_json, response_json, response_body, meta_json, error_text,
               elapsed_ms, summary, created_at
        FROM scrape_logs ${wh}
-       ORDER BY id DESC
+       ${orderSql}
        LIMIT ? OFFSET ?`,
       [...params, pageSize, offset]
     );

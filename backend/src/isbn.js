@@ -714,101 +714,145 @@ async function _fetchBookMetaDetailedInner(isbn, clean, runId) {
     { isbn: clean, meta }
   );
 
-  try {
+  async function applyIsbnWork(reason) {
     const before = meta ? { ...meta } : null;
-    const filled = await isbnWork.fillGaps(meta, clean);
-    debug.isbn_work = filled.debug;
-    if (filled.meta) meta = filled.meta;
-    const iwUsed = !!(filled.debug && filled.debug.used);
-    const iwSkip = filled.debug && filled.debug.skipped;
-    debug.sites.push({
-      site: 'isbn-work',
-      ok: iwUsed,
-      used: iwUsed,
-      skipped: iwSkip || null,
-      title: iwUsed && meta ? meta.title : null,
-      cover: iwUsed && meta ? meta.cover : null,
-      debug: filled.debug,
-    });
-    logSummary(
-      `  isbn-work used=${iwUsed} skipped=${iwSkip || '-'} title=${meta && meta.title} cover=${meta && meta.cover}`,
-      { isbn: clean, site: 'isbn-work', ok: iwUsed, meta }
-    );
-    logScrape('isbn_work_fill', {
-      isbn: clean,
-      site: 'isbn-work',
-      before,
-      after: meta,
-      debug: filled.debug,
-      ok: iwUsed,
-      meta,
-      summary: `isbn-work used=${iwUsed} skipped=${iwSkip || '-'}`,
-    });
-  } catch (e) {
-    debug.isbn_work = { error: e.message || String(e) };
-    debug.sites.push({ site: 'isbn-work', ok: false, error: e.message || String(e) });
-    logSummary(`  isbn-work ERR ${e.message || e}`, {
-      isbn: clean,
-      site: 'isbn-work',
-      ok: false,
-      error: e.message || String(e),
-    });
-    logScrape('isbn_work_fill', {
-      isbn: clean,
-      site: 'isbn-work',
-      ok: false,
-      error: e.message || String(e),
-    });
+    const need =
+      !meta ||
+      !meta.title ||
+      meta.title === '未知书名' ||
+      !meta.cover;
+    if (!need) {
+      logSummary(`  isbn-work skip complete (${reason})`, {
+        isbn: clean,
+        site: 'isbn-work',
+        ok: false,
+      });
+      debug.sites.push({
+        site: 'isbn-work',
+        ok: false,
+        used: false,
+        skipped: 'complete',
+        reason,
+      });
+      return false;
+    }
+    try {
+      const filled = await isbnWork.fillGaps(meta, clean);
+      debug.isbn_work = filled.debug;
+      if (filled.meta) meta = filled.meta;
+      const iwUsed = !!(filled.debug && filled.debug.used);
+      const iwSkip = filled.debug && filled.debug.skipped;
+      debug.sites.push({
+        site: 'isbn-work',
+        ok: iwUsed,
+        used: iwUsed,
+        skipped: iwSkip || null,
+        reason,
+        title: meta && meta.title,
+        cover: meta && meta.cover,
+        debug: filled.debug,
+      });
+      logSummary(
+        `  isbn-work used=${iwUsed} skipped=${iwSkip || '-'} reason=${reason} title=${meta && meta.title} cover=${meta && meta.cover}`,
+        { isbn: clean, site: 'isbn-work', ok: iwUsed, meta }
+      );
+      logScrape('isbn_work_fill', {
+        isbn: clean,
+        site: 'isbn-work',
+        before,
+        after: meta,
+        debug: filled.debug,
+        ok: iwUsed,
+        meta,
+        reason,
+        summary: `isbn-work used=${iwUsed} skipped=${iwSkip || '-'} reason=${reason}`,
+      });
+      return iwUsed;
+    } catch (e) {
+      debug.isbn_work = { error: e.message || String(e) };
+      debug.sites.push({
+        site: 'isbn-work',
+        ok: false,
+        error: e.message || String(e),
+        reason,
+      });
+      logSummary(`  isbn-work ERR ${e.message || e}`, {
+        isbn: clean,
+        site: 'isbn-work',
+        ok: false,
+        error: e.message || String(e),
+      });
+      return false;
+    }
   }
+
+  // 免费源缺书名或缺封面 → 立刻用 isbn.work
+  await applyIsbnWork('after_free');
 
   if (meta && meta.cover) {
     const coverIn = meta.cover;
     const okCover = await probeCover(meta.cover);
     debug.cover_checked = okCover ? 'ok' : 'bad';
-    // 探测失败仍保留 URL（浏览器/代理可能仍能显示；服务器探测可能因网络失败）
-    if (okCover) meta.cover = okCover;
-    else {
-      logSummary(`  COVER probe FAIL keep_url=${coverIn}`, {
+    if (okCover) {
+      meta.cover = okCover;
+    } else {
+      // 探测失败：丢掉坏封面，再用 isbn.work 补
+      meta.cover = null;
+      logSummary(`  COVER probe FAIL drop_url=${coverIn} -> isbn.work`, {
         isbn: clean,
         site: 'probe-cover',
         ok: false,
       });
-      debug.cover_kept_without_probe = true;
+      await applyIsbnWork('after_bad_cover');
+      if (meta && meta.cover) {
+        const again = await probeCover(meta.cover);
+        debug.cover_checked = again ? 'ok_after_isbn_work' : 'bad_after_isbn_work';
+        if (again) meta.cover = again;
+      }
     }
     debug.sites.push({
       site: 'probe-cover',
-      ok: !!okCover,
+      ok: !!meta.cover && String(debug.cover_checked || '').startsWith('ok'),
       in: coverIn,
-      out: meta.cover,
+      out: meta && meta.cover,
       checked: debug.cover_checked,
     });
     logScrape('cover_final', {
       isbn: clean,
       site: 'probe-cover',
       in: coverIn,
-      out: meta.cover,
+      out: meta && meta.cover,
       checked: debug.cover_checked,
-      ok: !!okCover,
-      summary: `COVER checked=${debug.cover_checked} url=${meta.cover}`,
+      ok: !!(meta && meta.cover),
+      summary: `COVER checked=${debug.cover_checked} url=${meta && meta.cover}`,
     });
-    logSummary(`  COVER final=${meta.cover} checked=${debug.cover_checked}`, {
+    logSummary(`  COVER final=${meta && meta.cover} checked=${debug.cover_checked}`, {
       isbn: clean,
       site: 'probe-cover',
-      ok: !!okCover,
+      ok: !!(meta && meta.cover),
     });
   } else {
-    debug.sites.push({ site: 'probe-cover', ok: false, reason: 'no_cover' });
+    // 免费源完全没封面 → isbn.work 已在 after_free 试过；再确认一次
+    if (!meta || !meta.cover) await applyIsbnWork('no_cover');
+    debug.sites.push({
+      site: 'probe-cover',
+      ok: !!(meta && meta.cover),
+      reason: meta && meta.cover ? 'filled_by_isbn_work' : 'no_cover',
+    });
     logScrape('cover_final', {
       isbn: clean,
       site: 'probe-cover',
       in: null,
-      out: null,
-      checked: 'skip_no_cover',
-      ok: false,
-      reason: 'no_cover',
-      summary: 'COVER none',
+      out: meta && meta.cover,
+      checked: meta && meta.cover ? 'from_isbn_work' : 'skip_no_cover',
+      ok: !!(meta && meta.cover),
+      summary: meta && meta.cover ? `COVER from_isbn_work ${meta.cover}` : 'COVER none',
     });
-    logSummary(`  COVER none`, { isbn: clean, site: 'probe-cover', ok: false });
+    logSummary(`  COVER ${meta && meta.cover ? meta.cover : 'none'}`, {
+      isbn: clean,
+      site: 'probe-cover',
+      ok: !!(meta && meta.cover),
+    });
   }
 
   const elapsed = Date.now() - t0;

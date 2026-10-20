@@ -224,7 +224,8 @@
         <button type="button" id="t2" onclick="showTab(2)">馆</button>
         <button type="button" id="t3" onclick="showTab(3)">账号</button>
         <button type="button" id="t4" class="hide" onclick="showTab(4)">群组</button>
-        <button type="button" id="t5" class="hide" onclick="showTab(5)">日志</button>
+        <button type="button" id="t5" class="hide" onclick="showTab(5)">审计</button>
+        <button type="button" id="t6" class="hide" onclick="showTab(6)">刮削</button>
       </div>
     </div>
     <div class="lib">
@@ -318,7 +319,7 @@
 
   
   <div id="p5" class="pane hide">
-    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">操作审计日志（仅管理员）</p>
+    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">操作审计：谁点了什么（不含外站返回）</p>
     <div class="srow">
       <input id="log-q" type="text" placeholder="搜索用户/动作/详情" onkeydown="if(event.key==='Enter')loadAuditLogs(1)">
       <button type="button" onclick="loadAuditLogs(1)">搜索</button>
@@ -328,23 +329,23 @@
     </select>
     <div id="audit-list" class="muted">…</div>
     <div id="audit-pager" style="display:flex;gap:8px;justify-content:center;margin-top:12px"></div>
+  </div>
 
-    <div style="margin-top:22px;padding-top:16px;border-top:1px solid var(--line)">
-      <p style="font-size:14px;font-weight:600;margin:0 0 6px">刮削日志（MySQL scrape_logs）</p>
-      <p style="font-size:12px;color:var(--muted);margin:0 0 10px">每次请求了哪个站、传了什么、返回了什么，均入库。可按 ISBN / run_id 查。</p>
-      <div class="srow">
-        <input id="scrape-log-isbn" type="text" placeholder="ISBN" style="flex:0;min-width:120px" onkeydown="if(event.key==='Enter')loadScrapeLogs()">
-        <input id="scrape-log-q" type="text" placeholder="过滤 site/url/event/body" onkeydown="if(event.key==='Enter')loadScrapeLogs()">
-        <button type="button" onclick="loadScrapeLogs()">查库</button>
-      </div>
-      <div style="display:flex;gap:8px;margin:8px 0;flex-wrap:wrap">
-        <button type="button" class="btn" style="width:auto;padding:6px 12px;font-size:12px" onclick="loadScrapeRuns()">最近批次</button>
-        <button type="button" class="btn" style="width:auto;padding:6px 12px;font-size:12px" onclick="loadScrapeLogs(100)">近100条</button>
-        <button type="button" class="btn" style="width:auto;padding:6px 12px;font-size:12px" onclick="clearScrapeLogs()">清7天前</button>
-      </div>
-      <div id="scrape-log-meta" class="muted" style="font-size:12px;margin-bottom:6px"></div>
-      <pre id="scrape-log-box" style="max-height:420px;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;font-size:11px;white-space:pre-wrap;word-break:break-all;margin:0">…</pre>
+  <div id="p6" class="pane hide">
+    <p style="font-size:14px;font-weight:600;margin:0 0 6px">刮削日志</p>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 10px">最近批次在上。点某批查看该次请求了哪些站、传了什么、返回了什么（时间正序）。</p>
+    <div class="srow">
+      <input id="scrape-log-isbn" type="text" placeholder="ISBN 过滤" style="flex:1" onkeydown="if(event.key==='Enter')loadScrapeRuns()">
+      <button type="button" onclick="loadScrapeRuns()">刷新批次</button>
     </div>
+    <div style="display:flex;gap:8px;margin:8px 0;flex-wrap:wrap">
+      <button type="button" class="btn" style="width:auto;padding:6px 12px;font-size:12px" onclick="scrapeLogRunId='';loadScrapeRuns()">全部批次</button>
+      <button type="button" class="btn" style="width:auto;padding:6px 12px;font-size:12px" onclick="loadScrapeLogsRaw()">原始流水</button>
+      <button type="button" class="btn" style="width:auto;padding:6px 12px;font-size:12px" onclick="clearScrapeLogs()">清7天前</button>
+    </div>
+    <div id="scrape-log-meta" class="muted" style="font-size:12px;margin-bottom:6px"></div>
+    <div id="scrape-run-list" style="margin-bottom:10px"></div>
+    <pre id="scrape-log-box" style="max-height:420px;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;font-size:11px;white-space:pre-wrap;word-break:break-all;margin:0">打开本页自动加载最近批次…</pre>
   </div>
 <div id="p3" class="pane hide">
     
@@ -512,7 +513,24 @@
   function isbn(s) { return String(s || '').replace(/[^0-9Xx]/g, '').toUpperCase(); }
   function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
   function cover(u) {
-    return u || 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="100"><rect fill="var(--primary)" width="80" height="100"/><text x="40" y="55" text-anchor="middle" fill="#fff" font-size="14">Book</text></svg>');
+    return u || 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="100"><rect fill="#6b7280" width="80" height="100"/><text x="40" y="55" text-anchor="middle" fill="#fff" font-size="14">Book</text></svg>');
+  }
+  function coverImg(u, w, h, extra) {
+    const src = cover(u);
+    const ww = w || 56;
+    const hh = h || 72;
+    // 豆瓣等图床常拦 Referer，去掉 referrer 才能显示
+    return (
+      '<img src="' +
+      src +
+      '" width="' +
+      ww +
+      '" height="' +
+      hh +
+      '" referrerpolicy="no-referrer" loading="lazy" style="object-fit:cover;border-radius:8px;background:var(--line)" onerror="this.style.opacity=.25"' +
+      (extra || '') +
+      '>'
+    );
   }
 
   async function api(path, opt) {
@@ -588,6 +606,7 @@
     const t3 = document.getElementById('t3');
     const t4 = document.getElementById('t4');
     const t5 = document.getElementById('t5');
+    const t6 = document.getElementById('t6');
     const adminUsers = document.getElementById('admin-users');
     const scrapeBtn = document.querySelector('#p1 .btn[onclick="scrapeMissing()"]');
     const libVis = document.getElementById('lib-vis-box');
@@ -599,6 +618,7 @@
       if (t2) t2.classList.add('hide');
       if (t4) t4.classList.add('hide');
       if (t5) t5.classList.add('hide');
+      if (t6) t6.classList.add('hide');
       if (scrapeBtn) scrapeBtn.classList.add('hide');
       showTab(1);
     } else {
@@ -608,9 +628,11 @@
       if (isAdmin()) {
         if (t4) t4.classList.remove('hide');
         if (t5) t5.classList.remove('hide');
+        if (t6) t6.classList.remove('hide');
         if (libVis) libVis.classList.remove('hide');
       } else {
         if (t5) t5.classList.add('hide');
+        if (t6) t6.classList.add('hide');
         if (t4) t4.classList.remove('hide');
         if (libVis) libVis.classList.add('hide');
       }
@@ -1656,7 +1678,7 @@
         const b = data.book;
         st('馆内已有', 'warn');
         toast('已存在', true);
-        openDlg('<div style="text-align:center"><img src="' + cover(b.cover) + '" width="80" height="110" style="border-radius:10px;object-fit:cover"><h3>' +
+        openDlg('<div style="text-align:center">' + coverImg(b.cover, 80, 110) + '<h3>' +
           esc(b.title) + '</h3><p style="color:var(--muted)">' + esc(b.authors || '') + '</p><p style="color:var(--warn-text)">已在「' + esc(libName()) + '」</p></div>');
         return;
       }
@@ -1672,7 +1694,7 @@
       };
       L('meta ' + (meta.source || '?') + ' ' + pending.title);
       openDlg(
-        '<div style="text-align:center"><img src="' + cover(pending.cover) + '" width="80" height="110" style="border-radius:10px;object-fit:cover;background:#eee"><h3>' +
+        '<div style="text-align:center">' + coverImg(pending.cover, 80, 110) + '<h3>' +
         esc(pending.title) + '</h3><p style="color:var(--muted)">' + esc(pending.authors) +
         '</p><p style="color:var(--primary);font-size:13px">ISBN ' + esc(code) + ' → ' + esc(libName()) + '</p>' +
         (meta.source ? '<p style="font-size:11px;color:var(--muted)">来源 ' + esc(meta.source) + '</p>' : '') +
@@ -2147,7 +2169,7 @@
         const div = document.createElement('div');
         div.className = 'card';
         const need = !b.title || b.title === '未知书名' || !b.cover;
-        div.innerHTML = '<img src="' + cover(b.cover) + '" onerror="this.style.opacity=.3"><div style="flex:1;min-width:0"><b>' + esc(b.title) +
+        div.innerHTML = coverImg(b.cover, 56, 72) + '<div style="flex:1;min-width:0"><b>' + esc(b.title) +
           '</b><div style="font-size:12px;color:var(--muted)">' + esc(b.authors || '') +
           '</div><div style="font-size:11px;color:var(--muted)">ISBN ' + esc(b.isbn) + '</div>' +
           (canWrite()
@@ -2172,7 +2194,7 @@
   function showTab(n) {
     // 账号页(3)所有人可进改密；用户管理仅 admin 可见区块
     if (isViewer() && (n === 0 || n === 2 || n === 4)) n = 1;
-    if (!isAdmin() && n === 5) n = 1;
+    if (!isAdmin() && (n === 5 || n === 6)) n = 1;
     document.getElementById('p0').classList.toggle('hide', n !== 0);
     document.getElementById('p1').classList.toggle('hide', n !== 1);
     document.getElementById('p2').classList.toggle('hide', n !== 2);
@@ -2180,6 +2202,8 @@
     document.getElementById('p4').classList.toggle('hide', n !== 4);
     const p5 = document.getElementById('p5');
     if (p5) p5.classList.toggle('hide', n !== 5);
+    const p6 = document.getElementById('p6');
+    if (p6) p6.classList.toggle('hide', n !== 6);
     document.getElementById('t0').classList.toggle('on', n === 0);
     document.getElementById('t1').classList.toggle('on', n === 1);
     document.getElementById('t2').classList.toggle('on', n === 2);
@@ -2187,6 +2211,8 @@
     document.getElementById('t4').classList.toggle('on', n === 4);
     const t5b = document.getElementById('t5');
     if (t5b) t5b.classList.toggle('on', n === 5);
+    const t6b = document.getElementById('t6');
+    if (t6b) t6b.classList.toggle('on', n === 6);
     if (n === 1) search();
     if (n === 2) {
       loadGroups();
@@ -2195,13 +2221,14 @@
     if (n === 3) loadUsers();
     if (n === 4) loadGroups();
     if (n === 5) loadAuditLogs(1);
+    if (n === 6) loadScrapeRuns();
     if (n !== 0) stop();
   }
 
 
   let auditPage = 1;
 
-  let scrapeLogPageSize = 50;
+  let scrapeLogPageSize = 80;
   let scrapeLogRunId = '';
 
   function fmtScrapeRow(row) {
@@ -2215,16 +2242,39 @@
       (row.http_status != null ? ' HTTP' + row.http_status : '') +
       (row.elapsed_ms != null ? ' ' + row.elapsed_ms + 'ms' : '');
     const bits = [];
-    if (row.isbn) bits.push('isbn=' + row.isbn);
-    if (row.run_id) bits.push('run=' + String(row.run_id).slice(0, 8));
     if (row.summary) bits.push(row.summary);
     if (row.url) bits.push('url=' + row.url);
     if (row.error) bits.push('err=' + row.error);
-    if (row.meta) bits.push('meta=' + (typeof row.meta === 'string' ? row.meta : JSON.stringify(row.meta)).slice(0, 300));
-    if (row.request) bits.push('REQ=' + (typeof row.request === 'string' ? row.request : JSON.stringify(row.request)).slice(0, 400));
-    if (row.response) bits.push('RES=' + (typeof row.response === 'string' ? row.response : JSON.stringify(row.response)).slice(0, 400));
-    if (row.body) bits.push('BODY=' + String(row.body).slice(0, 600));
-    return head + '\n  ' + bits.join('\n  ');
+    if (row.meta) {
+      const m = typeof row.meta === 'string' ? row.meta : JSON.stringify(row.meta);
+      bits.push('meta=' + m.slice(0, 280));
+    }
+    if (row.request) {
+      const rq = typeof row.request === 'string' ? row.request : JSON.stringify(row.request);
+      bits.push('REQ=' + rq.slice(0, 280));
+    }
+    if (row.response) {
+      const rs = typeof row.response === 'string' ? row.response : JSON.stringify(row.response);
+      bits.push('RES=' + rs.slice(0, 280));
+    }
+    if (row.body && String(row.body).length < 400) bits.push('BODY=' + String(row.body).slice(0, 300));
+    else if (row.body) bits.push('BODY_len=' + String(row.body).length);
+    return head + (bits.length ? '\n  ' + bits.join('\n  ') : '');
+  }
+
+  function parseMeta(raw) {
+    if (!raw) return null;
+    if (typeof raw === 'object') return raw;
+    try {
+      return JSON.parse(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function openScrapeRun(runId) {
+    scrapeLogRunId = runId || '';
+    await loadScrapeLogs(200);
   }
 
   async function loadScrapeLogs(pageSize) {
@@ -2233,28 +2283,57 @@
     const box = document.getElementById('scrape-log-box');
     const meta = document.getElementById('scrape-log-meta');
     if (!box) return;
-    box.textContent = '从库加载中…';
-    const q = (document.getElementById('scrape-log-q') && document.getElementById('scrape-log-q').value.trim()) || '';
+    if (!scrapeLogRunId) {
+      box.textContent = '请先点上方某次「批次卡片」查看该次明细（时间正序）。或点「原始流水」。';
+      return;
+    }
+    box.textContent = '加载明细（正序）…';
     const isbn = (document.getElementById('scrape-log-isbn') && document.getElementById('scrape-log-isbn').value.trim()) || '';
     try {
       const qs =
         '?page=1&page_size=' +
         scrapeLogPageSize +
-        (q ? '&q=' + encodeURIComponent(q) : '') +
+        '&order=asc' +
         (isbn ? '&isbn=' + encodeURIComponent(isbn) : '') +
-        (scrapeLogRunId ? '&run_id=' + encodeURIComponent(scrapeLogRunId) : '');
+        '&run_id=' +
+        encodeURIComponent(scrapeLogRunId);
       const d = await api('/scrape-logs' + qs);
       if (meta) {
         meta.textContent =
-          'MySQL scrape_logs · ' +
+          '批次 ' +
+          scrapeLogRunId.slice(0, 8) +
+          ' · ' +
           (d.returned || 0) +
-          '/' +
-          (d.total || 0) +
-          (isbn ? ' isbn=' + isbn : '') +
-          (scrapeLogRunId ? ' run=' + scrapeLogRunId.slice(0, 8) : '');
+          ' 条（时间正序：先请求后返回）';
       }
       if (!d.lines || !d.lines.length) {
-        box.textContent = '库中暂无日志。部署本版后点「重新刮削」再查。';
+        box.textContent = '该批次无明细';
+        return;
+      }
+      const lines = d.lines.slice().sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
+      box.textContent = lines.map(fmtScrapeRow).join('\n\n');
+      box.scrollTop = 0;
+    } catch (e) {
+      box.textContent = e.message || String(e);
+    }
+  }
+
+  async function loadScrapeLogsRaw() {
+    if (!isAdmin()) return;
+    const box = document.getElementById('scrape-log-box');
+    const meta = document.getElementById('scrape-log-meta');
+    if (!box) return;
+    scrapeLogRunId = '';
+    box.textContent = '加载原始流水…';
+    const isbn = (document.getElementById('scrape-log-isbn') && document.getElementById('scrape-log-isbn').value.trim()) || '';
+    try {
+      const qs =
+        '?page=1&page_size=100&order=desc' +
+        (isbn ? '&isbn=' + encodeURIComponent(isbn) : '');
+      const d = await api('/scrape-logs' + qs);
+      if (meta) meta.textContent = '原始流水 · 最新在上 · ' + (d.returned || 0) + '/' + (d.total || 0);
+      if (!d.lines || !d.lines.length) {
+        box.textContent = '暂无记录';
         return;
       }
       box.textContent = d.lines.map(fmtScrapeRow).join('\n\n');
@@ -2268,37 +2347,61 @@
     if (!isAdmin()) return;
     const box = document.getElementById('scrape-log-box');
     const meta = document.getElementById('scrape-log-meta');
+    const list = document.getElementById('scrape-run-list');
     if (!box) return;
-    box.textContent = '加载批次…';
+    if (list) list.innerHTML = '<div class="muted">加载批次…</div>';
+    box.textContent = '点上方批次卡片看该次「请求了谁、返回了什么」';
     const isbn = (document.getElementById('scrape-log-isbn') && document.getElementById('scrape-log-isbn').value.trim()) || '';
     try {
       const d = await api('/scrape-logs/runs?limit=30' + (isbn ? '&isbn=' + encodeURIComponent(isbn) : ''));
       const runs = d.runs || [];
-      if (meta) meta.textContent = '最近刮削批次 ' + runs.length;
+      if (meta) meta.textContent = '最近刮削批次 ' + runs.length + '（最新在上）';
+      if (!list) return;
       if (!runs.length) {
-        box.textContent = '暂无批次';
+        list.innerHTML = '<div class="muted">暂无批次。请先对某本书点「重新刮削」。</div>';
         return;
       }
-      box.textContent = runs
-        .map((r) => {
-          return (
-            String(r.started_at || '').replace('T', ' ').slice(0, 19) +
-            ' isbn=' +
-            (r.isbn || '-') +
-            ' events=' +
-            r.event_count +
-            ' ok=' +
-            r.end_ok +
-            '\n  run=' +
-            r.run_id +
-            '\n  ' +
-            (r.end_summary || r.end_meta || '') +
-            '\n  (点查库并在地址栏加 run_id 可滤此批；或复制 run_id)'
-          );
-        })
-        .join('\n\n');
-      scrapeLogRunId = runs[0] && runs[0].run_id ? runs[0].run_id : '';
+      list.innerHTML = '';
+      runs.forEach((r) => {
+        const m = parseMeta(r.end_meta);
+        const title = (m && m.title) || '';
+        const cover = (m && m.cover) || '';
+        const ok = r.end_ok == 1 || r.end_ok === true;
+        const t = String(r.started_at || r.ended_at || '').replace('T', ' ').slice(0, 19);
+        const div = document.createElement('div');
+        div.className = 'card';
+        div.style.cursor = 'pointer';
+        div.style.flexDirection = 'column';
+        div.style.gap = '4px';
+        div.innerHTML =
+          '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--muted)">' +
+          '<span>' +
+          esc(t) +
+          '</span><span style="color:' +
+          (ok ? 'var(--ok,#2a7)' : 'var(--bad,#c33)') +
+          '">' +
+          (ok ? '成功' : '失败/未知') +
+          '</span></div>' +
+          '<div><b>' +
+          esc(r.isbn || '-') +
+          '</b> ' +
+          esc(title || '(无书名)') +
+          '</div>' +
+          '<div style="font-size:12px;color:var(--muted);word-break:break-all">' +
+          (cover ? '封面 ' + esc(cover) : '无封面') +
+          ' · ' +
+          (r.event_count || 0) +
+          ' 条事件</div>' +
+          '<div style="font-size:11px;color:var(--muted)">run ' +
+          esc(String(r.run_id || '').slice(0, 8)) +
+          ' · 点击查看该次各站请求/返回</div>';
+        div.onclick = function () {
+          openScrapeRun(r.run_id);
+        };
+        list.appendChild(div);
+      });
     } catch (e) {
+      if (list) list.innerHTML = '<div class="muted" style="color:red">' + esc(e.message) + '</div>';
       box.textContent = e.message || String(e);
     }
   }
@@ -2310,7 +2413,7 @@
       const d = await api('/scrape-logs', { method: 'DELETE' });
       toast('已删 ' + (d.deleted || 0) + ' 条');
       scrapeLogRunId = '';
-      loadScrapeLogs();
+      loadScrapeRuns();
     } catch (e) {
       toast(e.message || '清空失败', true);
     }
@@ -2323,7 +2426,6 @@
     const pager = document.getElementById('audit-pager');
     if (!box) return;
     box.innerHTML = '<div class="muted">加载中…</div>';
-    loadScrapeLogs();
     const q = (document.getElementById('log-q') && document.getElementById('log-q').value.trim()) || '';
     const action =
       (document.getElementById('log-action') && document.getElementById('log-action').value) || '';
@@ -2450,7 +2552,9 @@
   window.createLib = createLib;
   window.loadAuditLogs = loadAuditLogs;
   window.loadScrapeLogs = loadScrapeLogs;
+  window.loadScrapeLogsRaw = loadScrapeLogsRaw;
   window.loadScrapeRuns = loadScrapeRuns;
+  window.openScrapeRun = openScrapeRun;
   window.clearScrapeLogs = clearScrapeLogs;
   window.applyTheme = applyTheme;
   window.saveTheme = saveTheme;
