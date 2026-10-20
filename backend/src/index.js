@@ -115,9 +115,10 @@ async function getUserGroupIds(user) {
 
 /**
  * 可见性：
- * - public: 所有登录用户
- * - group: 仅 owner_group_id 成员
- * - custom: library_groups 中的群组成员
+ * - public: 所有登录用户（默认图书馆；管理员可设）
+ * - group:  owner_group_id / library_groups 所属群组成员（仅管理员可设）
+ * - custom: library_groups 多群（仅管理员可设）
+ * - private: 仅创建者本人（普通用户自建馆默认）
  * admin 始终可见全部
  */
 async function canAccessLibrary(user, libraryId) {
@@ -125,8 +126,19 @@ async function canAccessLibrary(user, libraryId) {
   if (!lib) return { ok: false, lib: null, reason: 'not_found' };
   if (user.role === 'admin') return { ok: true, lib };
 
-  const vis = lib.visibility || 'group';
+  if (isDefaultLibraryName(lib.name)) return { ok: true, lib };
+
+  const vis = normalizeVisibility(lib.visibility);
   if (vis === 'public') return { ok: true, lib };
+
+  // 创建者本人始终可访问自己的馆
+  if (lib.created_by != null && Number(lib.created_by) === Number(user.id)) {
+    return { ok: true, lib };
+  }
+
+  if (vis === 'private') {
+    return { ok: false, lib, reason: 'forbidden' };
+  }
 
   const userGids = await getUserGroupIds(user);
   if (!userGids.length) return { ok: false, lib, reason: 'forbidden' };
@@ -134,18 +146,26 @@ async function canAccessLibrary(user, libraryId) {
   if (vis === 'group') {
     const og = lib.owner_group_id || lib.group_id;
     if (og && userGids.includes(Number(og))) return { ok: true, lib };
+    // 兼容 library_groups
+    const [m] = await pool.query(
+      `SELECT 1 FROM library_groups WHERE library_id=? AND group_id IN (?) LIMIT 1`,
+      [libraryId, userGids]
+    );
+    if (m.length) return { ok: true, lib };
     return { ok: false, lib, reason: 'forbidden' };
   }
 
   // custom
   const [m] = await pool.query(
-    `SELECT 1 FROM library_groups lg
-     WHERE lg.library_id=? AND lg.group_id IN (?)
-     LIMIT 1`,
+    `SELECT 1 FROM library_groups WHERE library_id=? AND group_id IN (?) LIMIT 1`,
     [libraryId, userGids]
   );
   if (m.length) return { ok: true, lib };
   return { ok: false, lib, reason: 'forbidden' };
+}
+
+function isDefaultLibraryName(name) {
+  return String(name || '').trim() === '默认图书馆';
 }
 
 /** 新用户不自动进组；公开馆即可访问默认资源 */
@@ -154,10 +174,13 @@ async function ensureUserInDefaultGroup(_userId) {
 }
 
 function normalizeVisibility(raw) {
-  const v = String(raw || 'group').trim().toLowerCase();
+  const v = String(raw || 'private').trim().toLowerCase();
   if (v === 'public' || v === 'all') return 'public';
+  if (v === 'group' || v === 'org') return 'group';
   if (v === 'custom' || v === 'shared') return 'custom';
-  return 'group';
+  if (v === 'private' || v === 'personal' || v === 'owner') return 'private';
+  // 未知旧值按私有处理，避免误开放
+  return 'private';
 }
 
 function publicUser(row) {
@@ -720,27 +743,36 @@ app.put('/api/groups/:id/libraries', adminRequired, async (req, res) => {
         Number(lib.owner_group_id) === id || Number(lib.group_id) === id;
       const now = want.has(Number(lib.id));
       if (now) {
-        await pool.query(
-          `UPDATE libraries SET owner_group_id=?, group_id=? WHERE id=?`,
-          [id, id, lib.id]
-        );
-        const vis = lib.visibility || 'group';
-        if (vis === 'group') {
-          await setLibraryVisibleGroups(lib.id, [id]);
-        } else if (vis === 'custom') {
-          // 保证本群在可见列表中
+        // 挂到群组 = 扩大为同组可见（public 保持全员；custom 追加本群）
+        const prevVis = normalizeVisibility(lib.visibility);
+        if (prevVis === 'public') {
+          await pool.query(
+            `UPDATE libraries SET owner_group_id=?, group_id=? WHERE id=?`,
+            [id, id, lib.id]
+          );
+        } else if (prevVis === 'custom') {
+          await pool.query(
+            `UPDATE libraries SET owner_group_id=?, group_id=? WHERE id=?`,
+            [id, id, lib.id]
+          );
           const cur = await getLibraryVisibleGroupIds(lib.id);
           if (!cur.includes(id)) {
             await setLibraryVisibleGroups(lib.id, [...cur, id]);
           }
+        } else {
+          await pool.query(
+            `UPDATE libraries SET owner_group_id=?, group_id=?, visibility='group' WHERE id=?`,
+            [id, id, lib.id]
+          );
+          await setLibraryVisibleGroups(lib.id, [id]);
         }
         assigned += 1;
       } else if (was) {
         await pool.query(
-          `UPDATE libraries SET owner_group_id=NULL, group_id=NULL WHERE id=?`,
+          `UPDATE libraries SET owner_group_id=NULL, group_id=NULL,
+             visibility=IF(visibility='public','public','private') WHERE id=?`,
           [lib.id]
         );
-        // 从 library_groups 去掉本群
         await pool.query(
           `DELETE FROM library_groups WHERE library_id=? AND group_id=?`,
           [lib.id, id]
@@ -771,7 +803,6 @@ app.put('/api/groups/:id/libraries', adminRequired, async (req, res) => {
 // ---------- libraries ----------
 app.get('/api/libraries', async (req, res) => {
   try {
-    const userGids = await getUserGroupIds(req.user);
     let rows;
     if (req.user.role === 'admin') {
       [rows] = await pool.query(
@@ -783,43 +814,53 @@ app.get('/api/libraries', async (req, res) => {
          LEFT JOIN org_groups og ON og.id=l.owner_group_id
          LEFT JOIN books b ON b.library_id = l.id
          GROUP BY l.id
-         ORDER BY l.created_at ASC`
-      );
-    } else if (!userGids.length) {
-      // 无群组：仍可见 public 馆（默认图书馆等）
-      [rows] = await pool.query(
-        `SELECT l.id, l.group_id, l.owner_group_id, l.visibility, l.name, l.description, l.created_by, l.created_at,
-                g.name AS group_name, og.name AS owner_group_name,
-                COUNT(DISTINCT b.id) AS book_count
-         FROM libraries l
-         LEFT JOIN org_groups g ON g.id=l.group_id
-         LEFT JOIN org_groups og ON og.id=l.owner_group_id
-         LEFT JOIN books b ON b.library_id = l.id
-         WHERE l.visibility='public'
-         GROUP BY l.id
-         ORDER BY l.created_at ASC`
+         ORDER BY (l.name='默认图书馆') DESC, l.created_at ASC`
       );
     } else {
-      [rows] = await pool.query(
-        `SELECT l.id, l.group_id, l.owner_group_id, l.visibility, l.name, l.description, l.created_by, l.created_at,
-                g.name AS group_name, og.name AS owner_group_name,
-                COUNT(DISTINCT b.id) AS book_count
-         FROM libraries l
-         LEFT JOIN org_groups g ON g.id=l.group_id
-         LEFT JOIN org_groups og ON og.id=l.owner_group_id
-         LEFT JOIN books b ON b.library_id = l.id
-         LEFT JOIN library_groups lg ON lg.library_id=l.id
-         WHERE l.visibility='public'
-            OR (l.visibility='group' AND l.owner_group_id IN (?))
-            OR (l.visibility='custom' AND lg.group_id IN (?))
-         GROUP BY l.id
-         ORDER BY l.created_at ASC`,
-        [userGids, userGids]
-      );
+      const userGids = await getUserGroupIds(req.user);
+      if (!userGids.length) {
+        // 无群组：public + 默认馆 + 自己创建的 private
+        [rows] = await pool.query(
+          `SELECT l.id, l.group_id, l.owner_group_id, l.visibility, l.name, l.description, l.created_by, l.created_at,
+                  g.name AS group_name, og.name AS owner_group_name,
+                  COUNT(DISTINCT b.id) AS book_count
+           FROM libraries l
+           LEFT JOIN org_groups g ON g.id=l.group_id
+           LEFT JOIN org_groups og ON og.id=l.owner_group_id
+           LEFT JOIN books b ON b.library_id = l.id
+           WHERE l.visibility='public'
+              OR l.name='默认图书馆'
+              OR l.created_by = ?
+           GROUP BY l.id
+           ORDER BY (l.name='默认图书馆') DESC, l.created_at ASC`,
+          [req.user.id]
+        );
+      } else {
+        [rows] = await pool.query(
+          `SELECT l.id, l.group_id, l.owner_group_id, l.visibility, l.name, l.description, l.created_by, l.created_at,
+                  g.name AS group_name, og.name AS owner_group_name,
+                  COUNT(DISTINCT b.id) AS book_count
+           FROM libraries l
+           LEFT JOIN org_groups g ON g.id=l.group_id
+           LEFT JOIN org_groups og ON og.id=l.owner_group_id
+           LEFT JOIN books b ON b.library_id = l.id
+           LEFT JOIN library_groups lg ON lg.library_id=l.id
+           WHERE l.visibility='public'
+              OR l.name='默认图书馆'
+              OR l.created_by = ?
+              OR (l.visibility='group' AND (l.owner_group_id IN (?) OR l.group_id IN (?) OR lg.group_id IN (?)))
+              OR (l.visibility='custom' AND lg.group_id IN (?))
+           GROUP BY l.id
+           ORDER BY (l.name='默认图书馆') DESC, l.created_at ASC`,
+          [req.user.id, userGids, userGids, userGids, userGids]
+        );
+      }
     }
-    // 附加 visible_group_ids
     for (const row of rows) {
       row.visible_group_ids = await getLibraryVisibleGroupIds(row.id);
+      row.visibility = normalizeVisibility(
+        isDefaultLibraryName(row.name) ? 'public' : row.visibility
+      );
       if (row.visibility === 'group' && row.owner_group_id && !row.visible_group_ids.length) {
         row.visible_group_ids = [row.owner_group_id];
       }
@@ -833,66 +874,71 @@ app.get('/api/libraries', async (req, res) => {
 app.post('/api/libraries', writeRequired, async (req, res) => {
   const name = String(req.body.name || '').trim();
   const description = String(req.body.description || '').trim() || null;
-  let visibility = normalizeVisibility(req.body.visibility);
-  let ownerGroupId =
-    req.body.owner_group_id != null
-      ? Number(req.body.owner_group_id)
-      : req.body.group_id != null
-        ? Number(req.body.group_id)
-        : null;
-  let visibleGroupIds = Array.isArray(req.body.visible_group_ids)
-    ? req.body.visible_group_ids.map(Number).filter((n) => n > 0)
-    : Array.isArray(req.body.group_ids)
-      ? req.body.group_ids.map(Number).filter((n) => n > 0)
-      : [];
 
   if (!name) return res.status(400).json({ error: '图书馆名称不能为空' });
   if (name.length > 128) return res.status(400).json({ error: '名称过长' });
 
   try {
-    const userGids = await getUserGroupIds(req.user);
     if (req.user.role === 'viewer') {
       return res.status(403).json({ error: '只读账号不能创建图书馆' });
     }
-    if (req.user.role === 'user') {
+
+    const isDefault = isDefaultLibraryName(name);
+    let visibility = 'private';
+    let ownerGroupId = null;
+    let visibleGroupIds = [];
+
+    if (isDefault) {
+      if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: '仅管理员可创建默认图书馆' });
+      }
+      visibility = 'public';
+    } else if (req.user.role === 'admin') {
+      // 仅管理员可创建 group / public / custom；默认 private
+      visibility = normalizeVisibility(req.body.visibility);
+      ownerGroupId =
+        req.body.owner_group_id != null
+          ? Number(req.body.owner_group_id)
+          : req.body.group_id != null
+            ? Number(req.body.group_id)
+            : null;
+      visibleGroupIds = Array.isArray(req.body.visible_group_ids)
+        ? req.body.visible_group_ids.map(Number).filter((n) => n > 0)
+        : Array.isArray(req.body.group_ids)
+          ? req.body.group_ids.map(Number).filter((n) => n > 0)
+          : [];
+
+      if (visibility === 'public') {
+        ownerGroupId = null;
+        visibleGroupIds = [];
+      } else if (visibility === 'group') {
+        if (!ownerGroupId && visibleGroupIds[0]) ownerGroupId = visibleGroupIds[0];
+        if (!ownerGroupId) {
+          return res.status(400).json({ error: '同组可见请指定所属群组 owner_group_id' });
+        }
+        visibleGroupIds = [ownerGroupId];
+      } else if (visibility === 'custom') {
+        if (!visibleGroupIds.length) {
+          return res.status(400).json({ error: '多群可见请指定 visible_group_ids' });
+        }
+        if (!ownerGroupId) ownerGroupId = visibleGroupIds[0];
+      } else {
+        visibility = 'private';
+        ownerGroupId = null;
+        visibleGroupIds = [];
+      }
+    } else {
+      // 普通用户：只能建个人馆（private），仅自己可见
       const [ownedLibs] = await pool.query(
-        `SELECT COUNT(*) AS c FROM libraries WHERE created_by=?`,
+        `SELECT COUNT(*) AS c FROM libraries WHERE created_by=? AND name<>'默认图书馆'`,
         [req.user.id]
       );
       if (Number(ownedLibs[0].c) >= 1) {
         return res.status(403).json({ error: '普通用户只能创建一个图书馆' });
       }
-      if (!userGids.length) {
-        return res.status(403).json({
-          error: '请先创建或加入一个群组，再建图书馆（将自动归属该群组）',
-        });
-      }
-      if (ownerGroupId) {
-        if (!userGids.includes(ownerGroupId)) {
-          return res.status(403).json({ error: '只能在自己所属群组下创建图书馆' });
-        }
-      } else {
-        ownerGroupId = userGids[0];
-      }
-      visibility = 'group';
-      visibleGroupIds = [ownerGroupId];
-    } else {
-      // 管理员：可建 public / group / custom；其它馆关联也在此或「群组→归属馆」配置
-      if (!ownerGroupId) ownerGroupId = userGids[0] || null;
-      if (visibility === 'public') {
-        visibleGroupIds = [];
-        // public 可不挂群
-      } else if (visibility === 'group') {
-        if (!ownerGroupId) {
-          return res.status(400).json({ error: '请指定所属群组（或先在群组页勾选归属）' });
-        }
-        visibleGroupIds = [ownerGroupId];
-      } else if (visibility === 'custom') {
-        if (!visibleGroupIds.length) {
-          return res.status(400).json({ error: 'custom 可见性请指定 visible_group_ids' });
-        }
-        if (!ownerGroupId) ownerGroupId = visibleGroupIds[0];
-      }
+      visibility = 'private';
+      ownerGroupId = null;
+      visibleGroupIds = [];
     }
 
     const [result] = await pool.query(
@@ -901,16 +947,19 @@ app.post('/api/libraries', writeRequired, async (req, res) => {
       [ownerGroupId, ownerGroupId, visibility, name, description, req.user.id]
     );
     const libId = result.insertId;
-    if (visibility === 'group' && ownerGroupId) {
-      await setLibraryVisibleGroups(libId, [ownerGroupId]);
-    } else if (visibility === 'custom') {
+    if (visibility === 'group' || visibility === 'custom') {
       await setLibraryVisibleGroups(libId, visibleGroupIds);
     } else {
       await setLibraryVisibleGroups(libId, []);
     }
     const lib = await getLibrary(libId);
     lib.visible_group_ids = await getLibraryVisibleGroupIds(libId);
-    await writeAudit(req, { action: 'library_create', target_type: 'library', target_id: libId, detail: { name, visibility } });
+    await writeAudit(req, {
+      action: 'library_create',
+      target_type: 'library',
+      target_id: libId,
+      detail: { name, visibility },
+    });
     res.status(201).json({ message: '创建成功', library: lib });
   } catch (e) {
     if (e && e.code === 'ER_DUP_ENTRY') {
@@ -934,14 +983,14 @@ app.put('/api/libraries/:id', writeRequired, async (req, res) => {
   if (req.user.role !== 'admin' && !isOwner) {
     return res.status(403).json({ error: '只能修改自己创建的图书馆' });
   }
-  // 改可见性/归属仅管理员
+  // 扩大/调整可见范围：仅管理员
   if (
     (req.body.visibility !== undefined ||
       req.body.visible_group_ids !== undefined ||
       req.body.owner_group_id !== undefined) &&
     req.user.role !== 'admin'
   ) {
-    return res.status(403).json({ error: '仅管理员可调整图书馆可见范围或归属' });
+    return res.status(403).json({ error: '仅管理员可将图书馆设为同组可见或全员可见' });
   }
 
   const name = String(req.body.name || '').trim();
@@ -958,18 +1007,60 @@ app.put('/api/libraries/:id', writeRequired, async (req, res) => {
       fields.push('description = ?');
       params.push(description);
     }
-    if (req.body.visibility !== undefined && req.user.role === 'admin') {
+
+    if (req.user.role === 'admin' && req.body.visibility !== undefined) {
       const vis = normalizeVisibility(req.body.visibility);
       fields.push('visibility = ?');
       params.push(vis);
-    }
-    if (req.body.owner_group_id !== undefined && req.user.role === 'admin') {
+
+      let og =
+        req.body.owner_group_id !== undefined
+          ? req.body.owner_group_id
+            ? Number(req.body.owner_group_id)
+            : null
+          : lib0.owner_group_id || lib0.group_id || null;
+
+      if (vis === 'public' || vis === 'private') {
+        if (vis === 'public') {
+          fields.push('owner_group_id = ?');
+          params.push(null);
+          fields.push('group_id = ?');
+          params.push(null);
+        }
+        // private 保留 created_by，可不改 group
+      } else if (vis === 'group') {
+        const gids = Array.isArray(req.body.visible_group_ids)
+          ? req.body.visible_group_ids.map(Number).filter((n) => n > 0)
+          : [];
+        if (!og && gids[0]) og = gids[0];
+        if (!og) {
+          return res.status(400).json({ error: '同组可见请指定所属群组' });
+        }
+        fields.push('owner_group_id = ?');
+        params.push(og);
+        fields.push('group_id = ?');
+        params.push(og);
+      } else if (vis === 'custom') {
+        const gids = Array.isArray(req.body.visible_group_ids)
+          ? req.body.visible_group_ids.map(Number).filter((n) => n > 0)
+          : [];
+        if (!gids.length) {
+          return res.status(400).json({ error: '多群可见请指定 visible_group_ids' });
+        }
+        if (!og) og = gids[0];
+        fields.push('owner_group_id = ?');
+        params.push(og);
+        fields.push('group_id = ?');
+        params.push(og);
+      }
+    } else if (req.user.role === 'admin' && req.body.owner_group_id !== undefined) {
       const og = req.body.owner_group_id ? Number(req.body.owner_group_id) : null;
       fields.push('owner_group_id = ?');
       params.push(og);
       fields.push('group_id = ?');
       params.push(og);
     }
+
     params.push(id);
     const [result] = await pool.query(
       `UPDATE libraries SET ${fields.join(', ')} WHERE id = ?`,
@@ -981,9 +1072,9 @@ app.put('/api/libraries/:id', writeRequired, async (req, res) => {
 
     if (req.user.role === 'admin') {
       const lib = await getLibrary(id);
-      const vis = lib.visibility || 'group';
+      const vis = normalizeVisibility(lib.visibility);
       if (req.body.visible_group_ids !== undefined || req.body.visibility !== undefined) {
-        if (vis === 'public') {
+        if (vis === 'public' || vis === 'private') {
           await setLibraryVisibleGroups(id, []);
         } else if (vis === 'group') {
           const og = lib.owner_group_id || lib.group_id;
@@ -1003,7 +1094,11 @@ app.put('/api/libraries/:id', writeRequired, async (req, res) => {
       action: 'library_update',
       target_type: 'library',
       target_id: id,
-      detail: { name },
+      detail: {
+        name,
+        visibility: lib.visibility,
+        owner_group_id: lib.owner_group_id,
+      },
     });
     res.json({ message: '已更新', library: lib });
   } catch (e) {
@@ -1358,8 +1453,14 @@ app.post('/api/books', writeRequired, async (req, res) => {
       `SELECT ${BOOK_COLS} FROM books WHERE id = ?`,
       [result.insertId]
     );
-    await writeAudit(req, { action: 'book_add', target_type: 'book', target_id: isbn || (book && book.isbn), detail: { library_id: libraryId, title: (book && book.title) || title } });
-    res.status(201).json({ message: '添加成功', book: rows[0] });
+    const saved = rows[0];
+    await writeAudit(req, {
+      action: 'book_add',
+      target_type: 'book',
+      target_id: (saved && saved.isbn) || isbn,
+      detail: { library_id: libraryId, title: (saved && saved.title) || title },
+    });
+    res.status(201).json({ message: '添加成功', book: saved });
   } catch (e) {
     if (e && e.code === 'ER_DUP_ENTRY') {
       const [rows] = await pool.query(

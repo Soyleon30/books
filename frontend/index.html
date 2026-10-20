@@ -278,14 +278,15 @@
   </div>
 
   <div id="p2" class="pane hide">
-    <p id="lib-user-hint" class="hide" style="font-size:12px;color:var(--muted);margin:0 0 10px">普通用户可自建 <b>1</b> 个图书馆（自动归属您的群组）。可对自己创建的馆改名。</p>
+    <p id="lib-user-hint" class="hide" style="font-size:12px;color:var(--muted);margin:0 0 10px">普通用户可自建 <b>1</b> 个图书馆，仅自己可见。扩大到同组/全员请联系管理员。</p>
     <input id="n" type="text" placeholder="新图书馆名称">
     <input id="d" type="text" placeholder="备注">
     <div id="lib-vis-box" class="hide">
-      <label style="display:block;font-size:13px;color:var(--muted);margin:8px 0 4px">谁能看到这座馆（仅管理员）</label>
+      <label style="display:block;font-size:13px;color:var(--muted);margin:8px 0 4px">谁能看到这座馆（仅管理员可设）</label>
       <select id="lib-vis" onchange="onLibVisChange()">
-        <option value="group">仅一个群组</option>
-        <option value="public">所有登录用户</option>
+        <option value="private" selected>仅创建者本人</option>
+        <option value="group">同组可见</option>
+        <option value="public">全部用户可见</option>
         <option value="custom">多个指定群组</option>
       </select>
       <p id="lib-vis-help" style="font-size:12px;color:var(--muted);margin:0 0 8px;line-height:1.45"></p>
@@ -621,12 +622,15 @@
 
   function visHelpText(vis) {
     if (vis === 'public') {
-      return '所有已登录用户都能看到这座馆（不限群组）。适合默认馆、公共书库。';
+      return '所有已登录用户都能看到（不限群组）。适合默认馆、公共书库。';
     }
     if (vis === 'custom') {
-      return '只有你勾选的那些群组成员能看到。可勾选多个群组，用于跨组共享。';
+      return '仅勾选的群组成员可见。可多选，用于跨组共享（仅管理员）。';
     }
-    return '只有「所属群组」的成员能看到。请单选一个群组作为所属。';
+    if (vis === 'group') {
+      return '仅「所属群组」成员可见。请单选一个群组（仅管理员）。';
+    }
+    return '仅创建者本人可见。普通用户新建馆默认此项。';
   }
 
   function renderGroupChecks(mode, selectedIds) {
@@ -635,11 +639,11 @@
     const label = document.getElementById('lib-gids-label');
     const help = document.getElementById('lib-vis-help');
     const visEl = document.getElementById('lib-vis');
-    const vis = mode || (visEl && visEl.value) || 'group';
+    const vis = mode || (visEl && visEl.value) || 'private';
     if (help) help.textContent = visHelpText(vis);
     if (!box) return;
-    if (wrap) wrap.classList.toggle('hide', vis === 'public');
-    if (vis === 'public') {
+    if (wrap) wrap.classList.toggle('hide', vis === 'public' || vis === 'private');
+    if (vis === 'public' || vis === 'private') {
       box.innerHTML = '';
       return;
     }
@@ -694,8 +698,8 @@
   }
 
   function selectedLibGroupIds() {
-    const vis = (document.getElementById('lib-vis') || {}).value || 'group';
-    if (vis === 'public') return [];
+    const vis = (document.getElementById('lib-vis') || {}).value || 'private';
+    if (vis === 'public' || vis === 'private') return [];
     if (vis === 'group') {
       const one = document.querySelector('#lib-gids input[data-gid]:checked');
       return one ? [Number(one.getAttribute('data-gid'))] : [];
@@ -703,6 +707,13 @@
     return [...document.querySelectorAll('#lib-gids input[data-gid]:checked')].map((el) =>
       Number(el.getAttribute('data-gid'))
     );
+  }
+
+  function visLabel(v) {
+    if (v === 'public') return '全员';
+    if (v === 'group') return '同组';
+    if (v === 'custom') return '多群';
+    return '仅自己';
   }
 
 
@@ -857,11 +868,7 @@
           ? list
               .map((l) => {
                 const vis =
-                  l.visibility === 'public'
-                    ? '全员'
-                    : l.visibility === 'custom'
-                      ? '多群'
-                      : '本群';
+                  visLabel(l.visibility);
                 return (
                   '<label style="display:flex;align-items:center;gap:8px;padding:8px 4px;border-bottom:1px solid var(--bg);font-size:14px">' +
                   '<input type="checkbox" data-lid="' +
@@ -1296,17 +1303,9 @@
     try {
       const body = {
         name: '默认图书馆',
-        description: '系统默认馆',
-        visibility: 'group',
+        description: '全员可见的默认馆',
+        visibility: 'public',
       };
-      const gids = selectedLibGroupIds();
-      if (gids[0]) {
-        body.owner_group_id = gids[0];
-        body.visible_group_ids = [gids[0]];
-      } else if (allGroups[0]) {
-        body.owner_group_id = allGroups[0].id;
-        body.visible_group_ids = [allGroups[0].id];
-      }
       const d = await api('/libraries', { method: 'POST', body: JSON.stringify(body) });
       toast('已添加默认图书馆');
       libId = Number(d.library.id);
@@ -1361,18 +1360,22 @@
       div.className = 'card';
       const on = Number(l.id) === Number(libId);
       const def = isDefaultLib(l);
-      const vis =
-        l.visibility === 'public' ? '全员' : l.visibility === 'custom' ? '多群' : '本群';
+      const vis = visLabel(l.visibility);
       div.innerHTML =
         '<div style="flex:1"><b>' +
         esc(l.name) +
         (on ? ' ·当前' : '') +
         (def ? ' ·默认' : '') +
+        (isMineLib(l) && !def ? ' ·我的' : '') +
         '</b><div style="font-size:12px;color:var(--muted)">' +
         (l.book_count || 0) +
         '本 · ' +
         vis +
-        (l.owner_group_name || l.group_name ? ' · ' + esc(l.owner_group_name || l.group_name) : '') +
+        (l.visibility === 'group' || l.visibility === 'custom'
+          ? l.owner_group_name || l.group_name
+            ? ' · ' + esc(l.owner_group_name || l.group_name)
+            : ''
+          : '') +
         '</div></div>' +
         '<div style="display:flex;flex-direction:column;gap:6px;font-size:12px">' +
         '<button type="button" data-a="use" style="border:0;background:0;color:var(--primary)">选用</button>' +
@@ -1424,21 +1427,26 @@
     if (!name) return toast('填名称', true);
     const body = { name, description };
     if (isAdmin()) {
-      const vis = document.getElementById('lib-vis').value || 'group';
+      const vis = document.getElementById('lib-vis').value || 'private';
       body.visibility = vis;
       const gids = selectedLibGroupIds();
       if (vis === 'group') {
-        if (!gids.length) return toast('请选择一个所属群组', true);
+        if (!gids.length) return toast('同组可见请选择一个所属群组', true);
         body.owner_group_id = gids[0];
         body.visible_group_ids = [gids[0]];
       } else if (vis === 'custom') {
         if (!gids.length) return toast('请至少勾选一个可访问群组', true);
         body.visible_group_ids = gids;
         body.owner_group_id = gids[0];
-      } else {
+      } else if (vis === 'public') {
         body.visibility = 'public';
         body.visible_group_ids = [];
+      } else {
+        body.visibility = 'private';
+        body.visible_group_ids = [];
       }
+    } else {
+      body.visibility = 'private';
     }
     try {
       const d = await api('/libraries', { method: 'POST', body: JSON.stringify(body) });
@@ -1446,7 +1454,7 @@
       localStorage.setItem(LS, String(libId));
       document.getElementById('n').value = '';
       document.getElementById('d').value = '';
-      toast(isAdmin() ? '已创建' : '已创建，已归属您的群组');
+      toast(isAdmin() ? '已创建' : '已创建（仅你可见）');
       await loadLibs();
     } catch (e) {
       toast(e.message, true);
@@ -1461,7 +1469,7 @@
         allGroups = d.groups || [];
       } catch (_) {}
     }
-    const curVis = lib.visibility || 'group';
+    const curVis = lib.visibility || 'private';
     const curIds = (lib.visible_group_ids || []).map(Number);
     if (curVis === 'group' && lib.owner_group_id && !curIds.length) {
       curIds.push(Number(lib.owner_group_id));
@@ -1472,14 +1480,17 @@
       '<p style="margin:0 0 8px;font-weight:600">可见范围 · ' +
       esc(lib.name) +
       '</p>' +
-      '<label style="display:block;font-size:13px;color:var(--muted);margin:0 0 4px">谁能看到</label>' +
+      '<label style="display:block;font-size:13px;color:var(--muted);margin:0 0 4px">谁能看到（仅管理员可改）</label>' +
       '<select id="dlg-vis" style="margin-bottom:8px">' +
+      '<option value="private"' +
+      (curVis === 'private' ? ' selected' : '') +
+      '>仅创建者本人</option>' +
       '<option value="group"' +
       (curVis === 'group' ? ' selected' : '') +
-      '>仅一个群组</option>' +
+      '>同组可见</option>' +
       '<option value="public"' +
       (curVis === 'public' ? ' selected' : '') +
-      '>所有登录用户</option>' +
+      '>全部用户可见</option>' +
       '<option value="custom"' +
       (curVis === 'custom' ? ' selected' : '') +
       '>多个指定群组</option>' +
@@ -1497,8 +1508,8 @@
       const label = document.getElementById('dlg-gids-label');
       const box = document.getElementById('dlg-gids');
       if (help) help.textContent = visHelpText(vis);
-      if (wrap) wrap.classList.toggle('hide', vis === 'public');
-      if (vis === 'public') {
+      if (wrap) wrap.classList.toggle('hide', vis === 'public' || vis === 'private');
+      if (vis === 'public' || vis === 'private') {
         box.innerHTML = '';
         return;
       }
@@ -1551,9 +1562,9 @@
       const vis = document.getElementById('dlg-vis').value;
       let visible_group_ids = [];
       let owner_group_id = lib.owner_group_id || null;
-      if (vis === 'public') {
+      if (vis === 'public' || vis === 'private') {
         visible_group_ids = [];
-        owner_group_id = owner_group_id || null;
+        if (vis === 'public') owner_group_id = null;
       } else if (vis === 'group') {
         const one = document.querySelector('#dlg-gids input[data-gid]:checked');
         if (!one) return toast('请选择一个所属群组', true);
@@ -1663,15 +1674,23 @@
 
   async function addBook() {
     if (!pending) return;
+    const isbn0 = pending.isbn;
+    L('add try ' + isbn0);
     try {
       const d = await api('/books', { method: 'POST', body: JSON.stringify(pending) });
-      toast('已添加 ' + d.book.title);
+      const title = (d && d.book && d.book.title) || pending.title || isbn0;
+      toast('已添加 ' + title);
       st('添加成功', 'ok');
+      L('add ok ' + title);
       closeDlg();
       loadLibs();
     } catch (e) {
+      L('add fail ' + (e && e.message ? e.message : e) + (e && e.status ? ' status=' + e.status : ''));
       if (e.status === 409) { toast('已存在', true); closeDlg(); }
-      else toast(e.message, true);
+      else {
+        toast(e.message || '添加失败', true);
+        st('添加失败 ' + (e.message || ''), 'err');
+      }
     }
   }
 

@@ -155,14 +155,41 @@ async function initDb() {
        WHERE l.name='默认图书馆'`
     );
 
-    // 群组由管理员按需创建；旧数据补全 visibility / library_groups
+    // 旧数据：无 visibility 的非默认馆 → private（仅创建者）
     await conn.query(
-      `UPDATE libraries SET visibility='group'
+      `UPDATE libraries SET visibility='private'
        WHERE (visibility IS NULL OR visibility='') AND name<>'默认图书馆'`
     );
+    // 一次性：曾默认写成 group 的个人馆 → private（有标记则跳过，避免覆盖管理员已设的共享）
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS schema_flags (
+        flag_key VARCHAR(64) NOT NULL PRIMARY KEY,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+    const [flagRows] = await conn.query(
+      `SELECT flag_key FROM schema_flags WHERE flag_key='lib_private_owner_v1' LIMIT 1`
+    );
+    if (!flagRows.length) {
+      await conn.query(
+        `UPDATE libraries SET visibility='private'
+         WHERE name<>'默认图书馆'
+           AND visibility IN ('group','custom')
+           AND created_by IS NOT NULL`
+      );
+      await conn.query(
+        `DELETE lg FROM library_groups lg
+         INNER JOIN libraries l ON l.id=lg.library_id
+         WHERE l.visibility='private'`
+      );
+      await conn.query(
+        `INSERT INTO schema_flags (flag_key) VALUES ('lib_private_owner_v1')`
+      );
+    }
     await conn.query(
       `UPDATE libraries SET group_id = owner_group_id
-       WHERE group_id IS NULL AND owner_group_id IS NOT NULL`
+       WHERE group_id IS NULL AND owner_group_id IS NOT NULL
+         AND visibility IN ('group','custom')`
     );
     await conn.query(`
       INSERT IGNORE INTO library_groups (library_id, group_id)
