@@ -2,6 +2,8 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { pool, initDb } = require('./db');
+const fs = require('fs');
+const path = require('path');
 const { normalizeIsbn, isValidIsbn, fetchBookMeta, fetchBookMetaDetailed } = require('./isbn');
 const {
   hashPassword,
@@ -18,6 +20,8 @@ const {
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
+const SCRAPE_LOG_DIR = path.join(__dirname, '..', 'logs');
+if (!fs.existsSync(SCRAPE_LOG_DIR)) fs.mkdirSync(SCRAPE_LOG_DIR, { recursive: true });
 
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
@@ -1255,6 +1259,95 @@ app.get('/api/audit-logs/actions', adminRequired, async (_req, res) => {
     res.json({ actions: rows.map((r) => r.action) });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------- scrape logs (admin): 请求/响应全文，便于排查封面刮削 ----------
+const SCRAPE_LOG_FILES = {
+  scrape: 'scrape.log',
+  requests: 'requests.log',
+};
+
+function readLogTail(filePath, { lines = 200, q = '' } = {}) {
+  if (!fs.existsSync(filePath)) {
+    return { exists: false, lines: [], total_lines: 0 };
+  }
+  const raw = fs.readFileSync(filePath, 'utf8');
+  let all = raw.split(/\r?\n/).filter((l) => l.trim());
+  const total = all.length;
+  if (q) {
+    const qq = q.toLowerCase();
+    all = all.filter((l) => l.toLowerCase().includes(qq));
+  }
+  const n = Math.min(Math.max(1, Number(lines) || 200), 2000);
+  const slice = all.slice(-n);
+  const parsed = slice.map((line) => {
+    try {
+      return JSON.parse(line);
+    } catch {
+      return { raw: line };
+    }
+  });
+  return { exists: true, lines: parsed, total_lines: total, returned: parsed.length };
+}
+
+app.get('/api/scrape-logs', adminRequired, async (req, res) => {
+  try {
+    const kind = String(req.query.kind || 'scrape').toLowerCase();
+    const name = SCRAPE_LOG_FILES[kind] || SCRAPE_LOG_FILES.scrape;
+    const filePath = path.join(SCRAPE_LOG_DIR, name);
+    const lines = Math.min(2000, Math.max(1, Number(req.query.lines || 200)));
+    const q = String(req.query.q || '').trim();
+    const result = readLogTail(filePath, { lines, q });
+    res.json({
+      kind: SCRAPE_LOG_FILES[kind] ? kind : 'scrape',
+      file: name,
+      path: filePath,
+      ...result,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message || String(e) });
+  }
+});
+
+app.get('/api/scrape-logs/files', adminRequired, async (_req, res) => {
+  try {
+    const files = [];
+    for (const [kind, name] of Object.entries(SCRAPE_LOG_FILES)) {
+      const p = path.join(SCRAPE_LOG_DIR, name);
+      let size = 0;
+      let mtime = null;
+      if (fs.existsSync(p)) {
+        const st = fs.statSync(p);
+        size = st.size;
+        mtime = st.mtime.toISOString();
+      }
+      files.push({ kind, name, path: p, size, mtime, exists: fs.existsSync(p) });
+    }
+    res.json({ dir: SCRAPE_LOG_DIR, files });
+  } catch (e) {
+    res.status(500).json({ error: e.message || String(e) });
+  }
+});
+
+app.delete('/api/scrape-logs', adminRequired, async (req, res) => {
+  try {
+    const kind = String(req.query.kind || 'all').toLowerCase();
+    const cleared = [];
+    const targets =
+      kind === 'all'
+        ? Object.values(SCRAPE_LOG_FILES)
+        : [SCRAPE_LOG_FILES[kind]].filter(Boolean);
+    for (const name of targets) {
+      const p = path.join(SCRAPE_LOG_DIR, name);
+      if (fs.existsSync(p)) {
+        fs.writeFileSync(p, '', 'utf8');
+        cleared.push(name);
+      }
+    }
+    res.json({ message: 'cleared', cleared });
+  } catch (e) {
+    res.status(500).json({ error: e.message || String(e) });
   }
 });
 

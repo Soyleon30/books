@@ -1,4 +1,5 @@
 # Pack books source as tar.gz (Linux-safe) + zip
+# Usage: .\scripts\pack-source.ps1
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location -LiteralPath $Root
@@ -14,23 +15,43 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 if (Test-Path -LiteralPath $Stage) { Remove-Item -LiteralPath $Stage -Recurse -Force }
 New-Item -ItemType Directory -Path $Stage | Out-Null
 
-foreach ($item in @('backend', 'frontend', 'paas.json', 'docker-compose.yml', '.env.example')) {
+foreach ($item in @('backend', 'frontend', 'paas.json', 'docker-compose.yml', '.env.example', 'VERSION')) {
   $s = Join-Path $Root $item
-  if (-not (Test-Path -LiteralPath $s)) { throw "missing $item" }
+  if (-not (Test-Path -LiteralPath $s)) {
+    if ($item -eq 'VERSION') { continue }
+    throw "missing $item"
+  }
   Copy-Item -LiteralPath $s -Destination (Join-Path $Stage $item) -Recurse -Force
 }
 
+# drop deps / secrets / runtime logs
 Get-ChildItem -LiteralPath $Stage -Recurse -Directory -Filter 'node_modules' -ErrorAction SilentlyContinue |
   ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+
+$dropFiles = @('.env', '*.log')
+foreach ($pat in $dropFiles) {
+  Get-ChildItem -LiteralPath $Stage -Recurse -File -Filter $pat -ErrorAction SilentlyContinue |
+    ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+}
+
+# keep empty logs dir for volume mount
+$logsDir = Join-Path $Stage 'backend\logs'
+New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
+if (-not (Test-Path -LiteralPath (Join-Path $logsDir '.gitkeep'))) {
+  Set-Content -LiteralPath (Join-Path $logsDir '.gitkeep') -Value '' -Encoding ascii
+}
 
 $must = @(
   'backend\Dockerfile',
   'backend\package.json',
   'backend\src\index.js',
+  'backend\src\isbn.js',
+  'backend\src\isbnWork.js',
   'frontend\Dockerfile',
   'frontend\index.html',
   'frontend\vendor\html5-qrcode.min.js',
-  'paas.json'
+  'paas.json',
+  'docker-compose.yml'
 )
 foreach ($m in $must) {
   if (-not (Test-Path -LiteralPath (Join-Path $Stage $m))) { throw "pack check fail: $m" }
@@ -60,10 +81,15 @@ try {
 }
 Remove-Item -LiteralPath $Stage -Recurse -Force
 
-$chk = & tar -tzf $TarGz | Select-String -Pattern 'backend/Dockerfile' | Select-Object -First 1
-if (-not $chk) { throw "tar.gz missing backend/Dockerfile" }
+$chk = & tar -tzf $TarGz | Select-String -Pattern 'backend/src/isbn.js' | Select-Object -First 1
+if (-not $chk) { throw "tar.gz missing backend/src/isbn.js" }
 
-Write-Host "DONE"
+$ver = if (Test-Path -LiteralPath (Join-Path $Root 'VERSION')) {
+  (Get-Content -LiteralPath (Join-Path $Root 'VERSION') -Raw).Trim()
+} else { '?' }
+
+Write-Host "DONE v$ver"
 Write-Host "UPLOAD_THIS: $TarGz"
 Write-Host "UPLOAD_ALT: $Zip"
 Write-Host "TAR_MB: $([math]::Round((Get-Item $TarGz).Length/1MB, 2))"
+Write-Host "ZIP_MB: $([math]::Round((Get-Item $Zip).Length/1MB, 2))"

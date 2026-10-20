@@ -5,6 +5,9 @@
  * - 进程内缓存 + 失败冷却，避免重复扣次
  */
 
+const fs = require('fs');
+const path = require('path');
+
 const API =
   process.env.ISBN_WORK_API ||
   'https://data.isbn.work/openApi/getInfoByIsbn';
@@ -12,10 +15,45 @@ const API =
 const CACHE_MS = Number(process.env.ISBN_WORK_CACHE_MS || 7 * 24 * 3600 * 1000);
 const FAIL_COOLDOWN_MS = Number(process.env.ISBN_WORK_FAIL_COOLDOWN_MS || 30 * 60 * 1000);
 const TIMEOUT_MS = Number(process.env.ISBN_WORK_TIMEOUT_MS || 6000);
+const BODY_MAX = Number(process.env.SCRAPE_LOG_BODY_MAX || 8000);
 
 const cache = new Map(); // isbn -> { at, meta, err }
 let cooldownUntil = 0;
 let lastError = null;
+
+const logDir = path.join(__dirname, '..', 'logs');
+if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+const scrapeLog = fs.createWriteStream(path.join(logDir, 'scrape.log'), {
+  flags: 'a',
+  encoding: 'utf8',
+});
+const requestLog = fs.createWriteStream(path.join(logDir, 'requests.log'), {
+  flags: 'a',
+  encoding: 'utf8',
+});
+
+function redactUrl(url) {
+  return String(url || '').replace(/([?&](?:appKey|apikey|api_key|key)=)[^&]*/gi, '$1***');
+}
+
+function clip(s, max = BODY_MAX) {
+  const t = typeof s === 'string' ? s : JSON.stringify(s);
+  if (!t) return '';
+  if (t.length <= max) return t;
+  return t.slice(0, max) + `…[truncated ${t.length - max} chars, total ${t.length}]`;
+}
+
+function logLine(stream, obj) {
+  try {
+    stream.write(`${JSON.stringify({ ts: new Date().toISOString(), ...obj })}\n`);
+  } catch (_) {}
+}
+
+function logIw(event, payload = {}) {
+  const row = { event, provider: 'isbn-work', ...payload };
+  logLine(scrapeLog, row);
+  logLine(requestLog, row);
+}
 
 function getAppKey() {
   return String(process.env.ISBN_WORK_APP_KEY || process.env.ISBN_APP_KEY || '').trim();
@@ -145,16 +183,39 @@ async function lookup(isbn) {
   const appKey = getAppKey();
   const url =
     `${API}?isbn=${encodeURIComponent(key)}&appKey=${encodeURIComponent(appKey)}`;
+  const reqHeaders = {
+    Accept: 'application/json',
+    'User-Agent': 'book-scanner/1.0',
+  };
+  const t0 = Date.now();
+  logIw('http_request', {
+    phase: 'request',
+    isbn: key,
+    method: 'GET',
+    url: redactUrl(url),
+    timeout_ms: TIMEOUT_MS,
+    headers: reqHeaders,
+  });
 
   try {
     const res = await fetch(url, {
       signal: AbortSignal.timeout(TIMEOUT_MS),
-      headers: {
-        Accept: 'application/json',
-        'User-Agent': 'book-scanner/1.0',
-      },
+      headers: reqHeaders,
     });
     const text = await res.text();
+    logIw('http_response', {
+      phase: 'response',
+      isbn: key,
+      method: 'GET',
+      url: redactUrl(url),
+      status: res.status,
+      ok: res.ok,
+      content_type: String(res.headers.get('content-type') || ''),
+      elapsed_ms: Date.now() - t0,
+      body_len: text ? text.length : 0,
+      body: clip(text),
+    });
+
     let data = null;
     try {
       data = JSON.parse(text);
@@ -162,6 +223,7 @@ async function lookup(isbn) {
       lastError = 'bad_json';
       debug.error = lastError;
       cooldownUntil = now + 5 * 60 * 1000;
+      logIw('lookup_result', { isbn: key, ok: false, error: lastError, body_head: clip(text, 500) });
       return { meta: null, debug };
     }
 
@@ -173,16 +235,39 @@ async function lookup(isbn) {
         cooldownUntil = now + FAIL_COOLDOWN_MS;
       }
       cache.set(key, { at: now, meta: null, err: msg });
+      logIw('lookup_result', {
+        isbn: key,
+        ok: false,
+        error: msg,
+        raw: clip(JSON.stringify(data)),
+        cooldown_until: cooldownUntil || null,
+      });
       return { meta: null, debug };
     }
 
-    const meta = mapPayload(data.data || data.result || data);
+    const rawPayload = data.data || data.result || data;
+    const meta = mapPayload(rawPayload);
     cache.set(key, { at: now, meta });
+    logIw('lookup_result', {
+      isbn: key,
+      ok: !!meta,
+      meta,
+      raw_payload: clip(JSON.stringify(rawPayload)),
+      raw_full: clip(JSON.stringify(data)),
+    });
     return { meta, debug };
   } catch (e) {
     lastError = e.message || String(e);
     debug.error = lastError;
     cooldownUntil = now + 5 * 60 * 1000;
+    logIw('http_error', {
+      phase: 'error',
+      isbn: key,
+      url: redactUrl(url),
+      elapsed_ms: Date.now() - t0,
+      error: lastError,
+    });
+    logIw('lookup_result', { isbn: key, ok: false, error: lastError });
     return { meta: null, debug };
   }
 }
@@ -193,6 +278,7 @@ async function lookup(isbn) {
  */
 async function fillGaps(baseMeta, isbn) {
   const debug = { provider: 'isbn-work-fill', used: false };
+  const before = baseMeta ? { ...baseMeta } : null;
   if (!shouldFill(baseMeta)) {
     debug.skipped = baseMeta
       ? isEnabled()
@@ -201,6 +287,7 @@ async function fillGaps(baseMeta, isbn) {
           : 'complete'
         : 'no_app_key'
       : 'no_app_key';
+    logIw('fill_gaps', { isbn, skipped: debug.skipped, before });
     return { meta: baseMeta || null, debug };
   }
 
@@ -218,22 +305,22 @@ async function fillGaps(baseMeta, isbn) {
 
   debug.lookup = lookDebug;
   if (!iw) {
+    logIw('fill_gaps', { isbn, used: false, before, iw: null, lookup: lookDebug });
     return { meta: baseMeta || null, debug };
   }
 
   debug.used = true;
   if (!baseMeta) {
-    return {
-      meta: {
-        title: iw.title || '未知书名',
-        authors: iw.authors || '未知作者',
-        cover: iw.cover || null,
-        publisher: iw.publisher || null,
-        published: iw.published || null,
-        source: 'isbn-work',
-      },
-      debug,
+    const meta = {
+      title: iw.title || '未知书名',
+      authors: iw.authors || '未知作者',
+      cover: iw.cover || null,
+      publisher: iw.publisher || null,
+      published: iw.published || null,
+      source: 'isbn-work',
     };
+    logIw('fill_gaps', { isbn, used: true, before: null, iw, after: meta, lookup: lookDebug });
+    return { meta, debug };
   }
 
   const merged = {
@@ -252,6 +339,7 @@ async function fillGaps(baseMeta, isbn) {
       ? baseMeta.source
       : [baseMeta.source, 'isbn-work'].filter(Boolean).join('+'),
   };
+  logIw('fill_gaps', { isbn, used: true, before, iw, after: merged, lookup: lookDebug });
   return { meta: merged, debug };
 }
 

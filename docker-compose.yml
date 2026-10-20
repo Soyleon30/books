@@ -16,8 +16,11 @@ services:
       ISBN_WORK_APP_KEY: ${ISBN_WORK_APP_KEY:-}
       BOOK_META_API: ${BOOK_META_API:-}
       DOUBAN_API_KEY: ${DOUBAN_API_KEY:-}
+      SCRAPE_LOG_BODY_MAX: ${SCRAPE_LOG_BODY_MAX:-8000}
     ports:
       - "${API_PORT:-3000}:3000"
+    volumes:
+      - ./backend/logs:/app/logs
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

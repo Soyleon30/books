@@ -1,7 +1,7 @@
 {
   "name": "图书管理",
   "slug": "book-scanner",
-  "version": "1.9.6",
+  "version": "1.9.7",
   "description": "图书管理（ISBN 扫码入库）",
   "deploy_mode": "stack",
   "network": "book-scanner-net",
@@ -26,7 +26,8 @@
         "ADMIN_PASSWORD",
         "ISBN_WORK_APP_KEY",
         "BOOK_META_API",
-        "DOUBAN_API_KEY"
+        "DOUBAN_API_KEY",
+        "SCRAPE_LOG_BODY_MAX"
       ]
     },
     {

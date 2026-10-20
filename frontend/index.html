@@ -328,6 +328,25 @@
     </select>
     <div id="audit-list" class="muted">…</div>
     <div id="audit-pager" style="display:flex;gap:8px;justify-content:center;margin-top:12px"></div>
+
+    <div style="margin-top:22px;padding-top:16px;border-top:1px solid var(--line)">
+      <p style="font-size:14px;font-weight:600;margin:0 0 6px">刮削调试日志</p>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 10px">记录每次外源请求与完整返回（豆瓣/Google/OL/isbn.work/封面探测）。文件：backend/logs/</p>
+      <div class="srow">
+        <select id="scrape-log-kind" onchange="loadScrapeLogs()" style="flex:0;min-width:120px">
+          <option value="scrape">scrape.log</option>
+          <option value="requests">requests.log</option>
+        </select>
+        <input id="scrape-log-q" type="text" placeholder="过滤 ISBN/url/event" onkeydown="if(event.key==='Enter')loadScrapeLogs()">
+        <button type="button" onclick="loadScrapeLogs()">刷新</button>
+      </div>
+      <div style="display:flex;gap:8px;margin:8px 0;flex-wrap:wrap">
+        <button type="button" class="btn" style="width:auto;padding:6px 12px;font-size:12px" onclick="loadScrapeLogs(500)">近500行</button>
+        <button type="button" class="btn" style="width:auto;padding:6px 12px;font-size:12px" onclick="clearScrapeLogs()">清空当前日志</button>
+      </div>
+      <div id="scrape-log-meta" class="muted" style="font-size:12px;margin-bottom:6px"></div>
+      <pre id="scrape-log-box" style="max-height:420px;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;font-size:11px;white-space:pre-wrap;word-break:break-all;margin:0">…</pre>
+    </div>
   </div>
 <div id="p3" class="pane hide">
     
@@ -2181,6 +2200,66 @@
 
   let auditPage = 1;
 
+  let scrapeLogLines = 200;
+
+  async function loadScrapeLogs(lines) {
+    if (!isAdmin()) return;
+    if (lines) scrapeLogLines = lines;
+    const box = document.getElementById('scrape-log-box');
+    const meta = document.getElementById('scrape-log-meta');
+    if (!box) return;
+    box.textContent = '加载中…';
+    const kind = (document.getElementById('scrape-log-kind') && document.getElementById('scrape-log-kind').value) || 'scrape';
+    const q = (document.getElementById('scrape-log-q') && document.getElementById('scrape-log-q').value.trim()) || '';
+    try {
+      const qs =
+        '?kind=' +
+        encodeURIComponent(kind) +
+        '&lines=' +
+        scrapeLogLines +
+        (q ? '&q=' + encodeURIComponent(q) : '');
+      const d = await api('/scrape-logs' + qs);
+      if (meta) {
+        meta.textContent =
+          (d.file || '') +
+          (d.exists === false ? ' （尚无文件，先刮削一次）' : '') +
+          ' · 返回 ' +
+          (d.returned || 0) +
+          ' / 总行 ' +
+          (d.total_lines || 0);
+      }
+      if (!d.lines || !d.lines.length) {
+        box.textContent = d.exists === false ? '日志文件不存在，请先点「重新刮削」' : '无匹配行';
+        return;
+      }
+      box.textContent = d.lines
+        .map((row) => {
+          try {
+            return JSON.stringify(row);
+          } catch (_) {
+            return String(row);
+          }
+        })
+        .join('\n');
+      box.scrollTop = box.scrollHeight;
+    } catch (e) {
+      box.textContent = e.message || String(e);
+    }
+  }
+
+  async function clearScrapeLogs() {
+    if (!isAdmin()) return;
+    if (!confirm('确认清空当前选中的刮削日志文件？')) return;
+    const kind = (document.getElementById('scrape-log-kind') && document.getElementById('scrape-log-kind').value) || 'scrape';
+    try {
+      await api('/scrape-logs?kind=' + encodeURIComponent(kind), { method: 'DELETE' });
+      toast('已清空');
+      loadScrapeLogs();
+    } catch (e) {
+      toast(e.message || '清空失败', true);
+    }
+  }
+
   async function loadAuditLogs(page) {
     if (!isAdmin()) return;
     if (page) auditPage = page;
@@ -2188,6 +2267,7 @@
     const pager = document.getElementById('audit-pager');
     if (!box) return;
     box.innerHTML = '<div class="muted">加载中…</div>';
+    loadScrapeLogs();
     const q = (document.getElementById('log-q') && document.getElementById('log-q').value.trim()) || '';
     const action =
       (document.getElementById('log-action') && document.getElementById('log-action').value) || '';
@@ -2313,6 +2393,8 @@
   window.search = search;
   window.createLib = createLib;
   window.loadAuditLogs = loadAuditLogs;
+  window.loadScrapeLogs = loadScrapeLogs;
+  window.clearScrapeLogs = clearScrapeLogs;
   window.applyTheme = applyTheme;
   window.saveTheme = saveTheme;
   window.migrateDefaultLib = migrateDefaultLib;

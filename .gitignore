@@ -3,6 +3,8 @@
 paas/.env
 node_modules/
 *.log
+backend/logs/*
+!backend/logs/.gitkeep
 dist/
 *.tar
 *.tar.gz
