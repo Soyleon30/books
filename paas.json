@@ -1,7 +1,7 @@
 {
   "name": "图书管理",
   "slug": "book-scanner",
-  "version": "1.10.4",
+  "version": "1.10.5",
   "description": "图书管理（ISBN 扫码入库）",
   "deploy_mode": "stack",
   "network": "book-scanner-net",

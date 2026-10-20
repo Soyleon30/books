@@ -101,7 +101,7 @@ async function writeAudit(req, { action, target_type, target_id, detail, user })
 }
 
 const BOOK_COLS =
-  'id, library_id, isbn, title, authors, cover, publisher, published, created_at';
+  'id, library_id, isbn, title, authors, cover, publisher, published, locked, created_at';
 
 function parseLibraryId(raw) {
   const id = Number(raw);
@@ -1493,6 +1493,12 @@ app.post('/api/books/scrape', writeRequired, async (req, res) => {
     );
     if (!rows.length) return res.status(404).json({ error: '馆内无此书，请先入库' });
     const book = rows[0];
+    if (Number(book.locked) === 1) {
+      return res.status(403).json({
+        error: '该书已锁定，禁止刮削（可先由管理员解锁）',
+        book,
+      });
+    }
 
     const { meta, debug } = await fetchBookMetaDetailed(isbn);
     if (!meta || (meta.title === '未知书名' && !meta.cover)) {
@@ -1536,7 +1542,7 @@ app.post('/api/books/scrape', writeRequired, async (req, res) => {
   }
 });
 
-/** 批量刮削当前馆「未知书名」或无封面的书 */
+/** 批量刮削当前馆「未知书名」或无封面的书（跳过锁定） */
 app.post('/api/books/scrape-missing', writeRequired, async (req, res) => {
   const libraryId = parseLibraryId(req.body.library_id);
   const limit = Math.min(Number(req.body.limit) || 20, 50);
@@ -1545,7 +1551,8 @@ app.post('/api/books/scrape-missing', writeRequired, async (req, res) => {
   try {
     const [rows] = await pool.query(
       `SELECT ${BOOK_COLS} FROM books
-       WHERE library_id=? AND (title='未知书名' OR title='' OR authors='未知作者' OR cover IS NULL OR cover='')
+       WHERE library_id=? AND IFNULL(locked,0)=0
+         AND (title='未知书名' OR title='' OR authors='未知作者' OR cover IS NULL OR cover='')
        ORDER BY id DESC LIMIT ?`,
       [libraryId, limit]
     );
@@ -1775,7 +1782,8 @@ app.post('/api/books/batch', writeRequired, async (req, res) => {
   });
 });
 
-app.delete('/api/books/:isbn', writeRequired, async (req, res) => {
+/** 删除藏书：仅管理员 */
+app.delete('/api/books/:isbn', adminRequired, async (req, res) => {
   const isbn = normalizeIsbn(req.params.isbn);
   const libraryId = parseLibraryId(req.query.library_id || req.body?.library_id);
   if (!libraryId) {
@@ -1795,7 +1803,88 @@ app.delete('/api/books/:isbn', writeRequired, async (req, res) => {
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: '未找到该图书' });
     }
+    await writeAudit(req, {
+      action: 'book_delete',
+      target_type: 'book',
+      target_id: isbn,
+      detail: { library_id: libraryId },
+    });
     res.json({ message: '已删除' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/** 锁定/解锁：仅管理员。锁定后批量刮削跳过，且禁止单本刮削 */
+app.post('/api/books/lock', adminRequired, async (req, res) => {
+  const isbn = normalizeIsbn(req.body.isbn);
+  const libraryId = parseLibraryId(req.body.library_id);
+  const locked = req.body.locked === false || req.body.locked === 0 || req.body.locked === '0' ? 0 : 1;
+  if (!isValidIsbn(isbn)) return res.status(400).json({ error: 'ISBN格式无效' });
+  if (!libraryId) return res.status(400).json({ error: '请先选择图书馆' });
+  try {
+    const access = await canAccessLibrary(req.user, libraryId);
+    if (!access.ok) {
+      return res.status(access.reason === 'not_found' ? 404 : 403).json({
+        error: access.reason === 'not_found' ? '图书馆不存在' : '无权操作该馆',
+      });
+    }
+    const [result] = await pool.query(
+      `UPDATE books SET locked=? WHERE library_id=? AND isbn=?`,
+      [locked, libraryId, isbn]
+    );
+    if (result.affectedRows === 0) return res.status(404).json({ error: '未找到该图书' });
+    const [rows] = await pool.query(
+      `SELECT ${BOOK_COLS} FROM books WHERE library_id=? AND isbn=? LIMIT 1`,
+      [libraryId, isbn]
+    );
+    await writeAudit(req, {
+      action: locked ? 'book_lock' : 'book_unlock',
+      target_type: 'book',
+      target_id: isbn,
+      detail: { library_id: libraryId, locked },
+    });
+    res.json({ message: locked ? '已锁定' : '已解锁', book: rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/** 移入其他馆：仅管理员 */
+app.post('/api/books/move', adminRequired, async (req, res) => {
+  const isbn = normalizeIsbn(req.body.isbn);
+  const fromId = parseLibraryId(req.body.from_library_id || req.body.library_id);
+  const toId = parseLibraryId(req.body.to_library_id);
+  if (!isValidIsbn(isbn)) return res.status(400).json({ error: 'ISBN格式无效' });
+  if (!fromId || !toId) return res.status(400).json({ error: '请指定源馆与目标馆' });
+  if (fromId === toId) return res.status(400).json({ error: '目标馆与当前馆相同' });
+  try {
+    const a1 = await canAccessLibrary(req.user, fromId);
+    const a2 = await canAccessLibrary(req.user, toId);
+    if (!a1.ok || !a2.ok) {
+      return res.status(403).json({ error: '无权操作相关图书馆' });
+    }
+    const [src] = await pool.query(
+      `SELECT ${BOOK_COLS} FROM books WHERE library_id=? AND isbn=? LIMIT 1`,
+      [fromId, isbn]
+    );
+    if (!src.length) return res.status(404).json({ error: '源馆无此书' });
+    const [dup] = await pool.query(
+      `SELECT id FROM books WHERE library_id=? AND isbn=? LIMIT 1`,
+      [toId, isbn]
+    );
+    if (dup.length) {
+      return res.status(409).json({ error: '目标馆已有相同 ISBN，无法移入' });
+    }
+    await pool.query(`UPDATE books SET library_id=? WHERE id=?`, [toId, src[0].id]);
+    const [rows] = await pool.query(`SELECT ${BOOK_COLS} FROM books WHERE id=?`, [src[0].id]);
+    await writeAudit(req, {
+      action: 'book_move',
+      target_type: 'book',
+      target_id: isbn,
+      detail: { from_library_id: fromId, to_library_id: toId },
+    });
+    res.json({ message: '已移入目标馆', book: rows[0] });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

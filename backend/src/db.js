@@ -106,6 +106,20 @@ async function initDb() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
 
+    // 锁定：批量刮削跳过；前端不显示刮削按钮
+    try {
+      if (!(await columnExists(conn, 'books', 'locked'))) {
+        await conn.query(
+          `ALTER TABLE books ADD COLUMN locked TINYINT(1) NOT NULL DEFAULT 0 AFTER published`
+        );
+      }
+      try {
+        await conn.query(`ALTER TABLE books ADD KEY idx_books_locked (library_id, locked)`);
+      } catch (_) {}
+    } catch (e) {
+      console.error('[initDb] books.locked:', e.message || e);
+    }
+
     const hasLibraryId = await columnExists(conn, 'books', 'library_id');
     if (!hasLibraryId) {
       const [libs] = await conn.query(

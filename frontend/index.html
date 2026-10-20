@@ -2252,6 +2252,82 @@
     }
   }
 
+  async function lockBook(isbn, locked, btn) {
+    if (!isAdmin() || !needLib()) return;
+    if (btn) btn.disabled = true;
+    try {
+      await api('/books/lock', {
+        method: 'POST',
+        body: JSON.stringify({ library_id: libId, isbn, locked: !!locked }),
+      });
+      toast(locked ? '已锁定' : '已解锁');
+      await search();
+    } catch (e) {
+      toast(e.message || '操作失败', true);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function moveBook(isbn) {
+    if (!isAdmin() || !needLib()) return;
+    const others = (libs || []).filter((l) => Number(l.id) !== Number(libId));
+    if (!others.length) return toast('没有可移入的其他馆', true);
+    const names = others.map((l, i) => i + 1 + '. ' + l.name + ' (#' + l.id + ')').join('\n');
+    const pick = prompt('移入目标馆（输入序号或馆ID）：\n' + names);
+    if (pick == null || !String(pick).trim()) return;
+    const raw = String(pick).trim();
+    let toId = null;
+    if (/^\d+$/.test(raw)) {
+      const n = Number(raw);
+      if (n >= 1 && n <= others.length && !others.some((l) => Number(l.id) === n)) {
+        toId = Number(others[n - 1].id);
+      } else {
+        toId = n;
+      }
+    }
+    if (!toId || !others.some((l) => Number(l.id) === toId)) {
+      return toast('目标馆无效', true);
+    }
+    try {
+      await api('/books/move', {
+        method: 'POST',
+        body: JSON.stringify({
+          isbn,
+          from_library_id: libId,
+          to_library_id: toId,
+        }),
+      });
+      toast('已移馆');
+      await search();
+      loadLibs();
+    } catch (e) {
+      toast(e.message || '移馆失败', true);
+    }
+  }
+
+  async function deleteBook(isbn, title) {
+    if (!isAdmin() || !needLib()) return;
+    const tip =
+      '确认删除该书？\n\n' +
+      (title || '未知书名') +
+      '\nISBN ' +
+      isbn +
+      '\n\n删除后不可恢复。';
+    if (!confirm(tip)) return;
+    try {
+      await api(
+        '/books/' + encodeURIComponent(isbn) + '?library_id=' + encodeURIComponent(libId),
+        { method: 'DELETE' }
+      );
+      toast('已删除');
+      await search();
+      loadLibs();
+    } catch (e) {
+      toast(e.message || '删除失败', true);
+    }
+  }
+
   async function search() {
     const box = document.getElementById('list');
     if (!libId) { box.innerHTML = '<div class="muted">请先选馆</div>'; return; }
@@ -2265,20 +2341,63 @@
       books.forEach((b) => {
         const div = document.createElement('div');
         div.className = 'card';
+        const locked = Number(b.locked) === 1;
         const need = !b.title || b.title === '未知书名' || !b.cover;
-        div.innerHTML = coverImg(b.cover, 56, 72) + '<div style="flex:1;min-width:0"><b>' + esc(b.title) +
-          '</b><div style="font-size:12px;color:var(--muted)">' + esc(b.authors || '') +
-          '</div><div style="font-size:11px;color:var(--muted)">ISBN ' + esc(b.isbn) + '</div>' +
-          (canWrite()
-            ? '<div style="margin-top:8px;display:flex;gap:10px">' +
-              '<button type="button" data-a="scrape" style="border:0;background:var(--primary);color:#fff;border-radius:8px;padding:4px 10px;font-size:12px">' +
-              (need ? '刮削补全' : '重新刮削') + '</button></div>'
+        let actions = '';
+        if (canWrite() && !locked) {
+          actions +=
+            '<button type="button" data-a="scrape" style="border:0;background:var(--primary);color:#fff;border-radius:8px;padding:4px 10px;font-size:12px">' +
+            (need ? '刮削补全' : '重新刮削') +
+            '</button>';
+        }
+        if (isAdmin()) {
+          actions +=
+            '<button type="button" data-a="lock" style="border:0;background:' +
+            (locked ? 'var(--accent)' : 'var(--accent-2)') +
+            ';color:#fff;border-radius:8px;padding:4px 10px;font-size:12px">' +
+            (locked ? '解锁' : '锁定') +
+            '</button>' +
+            '<button type="button" data-a="move" style="border:0;background:#fff;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:4px 10px;font-size:12px">移馆</button>' +
+            '<button type="button" data-a="del" style="border:0;background:var(--err-text);color:#fff;border-radius:8px;padding:4px 10px;font-size:12px">删除</button>';
+        }
+        div.innerHTML =
+          coverImg(b.cover, 56, 72) +
+          '<div style="flex:1;min-width:0"><b>' +
+          esc(b.title) +
+          (locked
+            ? ' <span style="font-size:11px;color:var(--warn-text);font-weight:700">🔒锁定</span>'
+            : '') +
+          '</b><div style="font-size:12px;color:var(--muted)">' +
+          esc(b.authors || '') +
+          '</div><div style="font-size:11px;color:var(--muted)">ISBN ' +
+          esc(b.isbn) +
+          '</div>' +
+          (actions
+            ? '<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px">' + actions + '</div>'
             : '') +
           '</div>';
         const sb = div.querySelector('[data-a=scrape]');
         if (sb) {
           sb.onclick = function () {
             scrapeOne(b.isbn, this);
+          };
+        }
+        const lb = div.querySelector('[data-a=lock]');
+        if (lb) {
+          lb.onclick = function () {
+            lockBook(b.isbn, !locked, this);
+          };
+        }
+        const mb = div.querySelector('[data-a=move]');
+        if (mb) {
+          mb.onclick = function () {
+            moveBook(b.isbn);
+          };
+        }
+        const db = div.querySelector('[data-a=del]');
+        if (db) {
+          db.onclick = function () {
+            deleteBook(b.isbn, b.title);
           };
         }
         box.appendChild(div);
@@ -2646,6 +2765,9 @@
   window.manual = manual;
   window.fromFile = fromFile;
   window.search = search;
+  window.lockBook = lockBook;
+  window.moveBook = moveBook;
+  window.deleteBook = deleteBook;
   window.createLib = createLib;
   window.loadAuditLogs = loadAuditLogs;
   window.loadScrapeLogs = loadScrapeLogs;
