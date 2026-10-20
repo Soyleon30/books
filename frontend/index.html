@@ -356,7 +356,11 @@
       <input id="q" type="text" placeholder="搜索" onkeydown="if(event.key==='Enter')search()">
       <button type="button" onclick="search()">搜索</button>
     </div>
-    <button type="button" class="btn" style="margin-bottom:12px;background:var(--accent-2);color:#fff;font-size:14px" onclick="scrapeMissing()">批量刮削未知书名</button>
+    <button type="button" class="btn" style="margin-bottom:8px;background:var(--accent-2);color:#fff;font-size:14px" onclick="scrapeMissing()">批量刮削未知书名</button>
+    <div id="admin-book-bulk" class="hide" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+      <button type="button" class="btn" style="flex:1;min-width:120px;margin:0;background:var(--warn-text);color:#fff;font-size:13px;padding:10px" onclick="lockLibraryAll(true)">整馆全部锁定</button>
+      <button type="button" class="btn" style="flex:1;min-width:120px;margin:0;background:#fff;border:1px solid var(--line);color:var(--text);font-size:13px;padding:10px;font-weight:600" onclick="lockLibraryAll(false)">整馆全部解锁</button>
+    </div>
     <div id="list" class="muted">…</div>
   </div>
 
@@ -698,10 +702,16 @@
     const t6 = document.getElementById('t6');
     const adminUsers = document.getElementById('admin-users');
     const scrapeBtn = document.querySelector('#p1 .btn[onclick="scrapeMissing()"]');
+    const adminBulk = document.getElementById('admin-book-bulk');
     const libVis = document.getElementById('lib-vis-box');
     // 所有人可进「账号」改密
     if (t3) t3.classList.remove('hide');
     if (adminUsers) adminUsers.classList.toggle('hide', !isAdmin());
+    if (adminBulk) {
+      adminBulk.classList.toggle('hide', !isAdmin());
+      if (isAdmin()) adminBulk.style.display = 'flex';
+      else adminBulk.style.display = 'none';
+    }
     if (isViewer()) {
       if (t0) t0.classList.add('hide');
       if (t2) t2.classList.add('hide');
@@ -2269,6 +2279,25 @@
     }
   }
 
+  async function lockLibraryAll(locked) {
+    if (!isAdmin() || !needLib()) return;
+    const name = libName() || ('馆#' + libId);
+    const tip = locked
+      ? '确认将「' + name + '」内全部图书锁定？\n锁定后批量刮削不会处理这些书，也不会显示单本刮削按钮。'
+      : '确认将「' + name + '」内全部图书解锁？';
+    if (!confirm(tip)) return;
+    try {
+      const d = await api('/books/lock-library', {
+        method: 'POST',
+        body: JSON.stringify({ library_id: libId, locked: !!locked }),
+      });
+      toast((d.message || (locked ? '已全部锁定' : '已全部解锁')) + ' · ' + (d.affected || 0) + ' 本');
+      await search();
+    } catch (e) {
+      toast(e.message || '操作失败', true);
+    }
+  }
+
   async function moveBook(isbn) {
     if (!isAdmin() || !needLib()) return;
     const others = (libs || []).filter((l) => Number(l.id) !== Number(libId));
@@ -2766,6 +2795,7 @@
   window.fromFile = fromFile;
   window.search = search;
   window.lockBook = lockBook;
+  window.lockLibraryAll = lockLibraryAll;
   window.moveBook = moveBook;
   window.deleteBook = deleteBook;
   window.createLib = createLib;

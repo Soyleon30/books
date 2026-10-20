@@ -1850,6 +1850,45 @@ app.post('/api/books/lock', adminRequired, async (req, res) => {
   }
 });
 
+/** 整馆锁定/解锁：仅管理员 */
+app.post('/api/books/lock-library', adminRequired, async (req, res) => {
+  const libraryId = parseLibraryId(req.body.library_id);
+  const locked = req.body.locked === false || req.body.locked === 0 || req.body.locked === '0' ? 0 : 1;
+  if (!libraryId) return res.status(400).json({ error: '请先选择图书馆' });
+  try {
+    const access = await canAccessLibrary(req.user, libraryId);
+    if (!access.ok) {
+      return res.status(access.reason === 'not_found' ? 404 : 403).json({
+        error: access.reason === 'not_found' ? '图书馆不存在' : '无权操作该馆',
+      });
+    }
+    const [cntRows] = await pool.query(
+      `SELECT COUNT(*) AS c FROM books WHERE library_id=?`,
+      [libraryId]
+    );
+    const total = Number(cntRows[0].c) || 0;
+    const [result] = await pool.query(
+      `UPDATE books SET locked=? WHERE library_id=?`,
+      [locked, libraryId]
+    );
+    await writeAudit(req, {
+      action: locked ? 'library_lock_all' : 'library_unlock_all',
+      target_type: 'library',
+      target_id: String(libraryId),
+      detail: { library_id: libraryId, locked, total, affected: result.affectedRows },
+    });
+    res.json({
+      message: locked ? '整馆已全部锁定' : '整馆已全部解锁',
+      library_id: libraryId,
+      locked,
+      total,
+      affected: result.affectedRows,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 /** 移入其他馆：仅管理员 */
 app.post('/api/books/move', adminRequired, async (req, res) => {
   const isbn = normalizeIsbn(req.body.isbn);
