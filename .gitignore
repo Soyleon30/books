@@ -8,3 +8,6 @@ dist/
 *.tar.gz
 *.zip
 !paas.json
+
+.env
+

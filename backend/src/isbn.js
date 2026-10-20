@@ -1,3 +1,5 @@
+const isbnWork = require('./isbnWork');
+
 function normalizeIsbn(raw) {
   return String(raw || '')
     .replace(/[^0-9Xx]/g, '')
@@ -33,11 +35,10 @@ function cleanCover(url) {
     low.includes('no-cover') ||
     low.includes('nocover') ||
     low.includes('placeholder') ||
-    low.endsWith('.gif') && low.includes('default')
+    (low.endsWith('.gif') && low.includes('default'))
   ) {
     return null;
   }
-  // 豆瓣小图升大图
   u = u.replace(/\/view\/subject\/s\//, '/view/subject/l/');
   u = u.replace(/\/spic\//, '/lpic/');
   return u;
@@ -70,7 +71,6 @@ async function fetchJson(url, timeoutMs = 8000) {
   }
 }
 
-/** HEAD/GET 探测封面是否真实可用（过滤占位/空图） */
 async function probeCover(url, timeoutMs = 4000) {
   const u = cleanCover(url);
   if (!u) return null;
@@ -89,7 +89,6 @@ async function probeCover(url, timeoutMs = 4000) {
     const ct = String(res.headers.get('content-type') || '');
     if (ct && !ct.includes('image') && !ct.includes('octet-stream')) return null;
     const buf = Buffer.from(await res.arrayBuffer());
-    // 过小多为占位/1x1
     if (buf.length < 1500) return null;
     return u;
   } catch {
@@ -99,7 +98,6 @@ async function probeCover(url, timeoutMs = 4000) {
 
 async function fromOpenLibrary(isbn) {
   try {
-    // 国内常超时，短超时避免拖慢整次刮削
     const data = await fetchJson(
       `https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`,
       3500
@@ -153,9 +151,8 @@ async function fromGoogleBooks(isbn) {
   }
 }
 
-/** 豆瓣：旧 v2 + 页面 meta 刮削（中文书主力） */
+/** 豆瓣：旧 v2 + 页面 meta（中文书主力，与 isbn.work 无关） */
 async function fromDouban(isbn) {
-  // 1) 旧 API（部分环境仍可用）
   const keys = [
     process.env.DOUBAN_API_KEY || '',
     '0ac44ae9383380c6b4a750069ef05747',
@@ -173,8 +170,8 @@ async function fromDouban(isbn) {
           title: pick(data.title),
           authors: pick((data.author || []).join(', '), (data.author || []).join(' / ')),
           cover: cleanCover(
-            data.images && (data.images.large || data.images.medium || data.images.small),
-            data.image
+            (data.images && (data.images.large || data.images.medium || data.images.small)) ||
+              data.image
           ),
           publisher: pick(data.publisher),
           published: pick(data.pubdate),
@@ -186,7 +183,6 @@ async function fromDouban(isbn) {
     }
   }
 
-  // 2) 豆瓣网页 og / subject 大图
   try {
     const page = await fetchText(`https://book.douban.com/isbn/${isbn}/`, 8000);
     if (!page.ok || !page.text) return null;
@@ -200,7 +196,6 @@ async function fromDouban(isbn) {
       (html.match(/<span\s+property="v:itemreviewed">([^<]+)</i) || [])[1] ||
       (html.match(/<title>([^<]+)/i) || [])[1];
 
-    // 优先 subject 大图，不要 default gif
     const subjectCovers = [
       ...html.matchAll(/https:\/\/img\d\.doubanio\.com\/view\/subject\/[ls]\/public\/s\d+\.jpg/gi),
     ].map((m) => m[0]);
@@ -237,30 +232,6 @@ async function fromDouban(isbn) {
   }
 }
 
-async function fromIsbnWork(isbn) {
-  try {
-    const data = await fetchJson(
-      `https://data.isbn.work/openApi/getInfoByIsbn?isbn=${isbn}&appKey=1`,
-      4000
-    );
-    if (!data || data.success === false) return null;
-    const d = data && (data.data || data.result || data);
-    if (!d || typeof d !== 'object') return null;
-    const title = pick(d.bookName, d.title, d.name);
-    if (!title) return null;
-    return {
-      title,
-      authors: pick(d.author, d.authors, d.writer),
-      cover: cleanCover(d.bookPic, d.pic, d.cover, d.img),
-      publisher: pick(d.press, d.publisher),
-      published: pick(d.pressDate, d.pubdate, d.publish),
-      source: 'isbn-work',
-    };
-  } catch {
-    return null;
-  }
-}
-
 async function fromCustomApi(isbn) {
   const tpl = process.env.BOOK_META_API || '';
   if (!tpl) return null;
@@ -274,7 +245,7 @@ async function fromCustomApi(isbn) {
     return {
       title,
       authors: pick(d.author, d.authors, d.writer, data.author),
-      cover: cleanCover(d.cover, d.image, d.pic, d.img, d.bookPic),
+      cover: cleanCover(d.cover || d.image || d.pic || d.img || d.bookPic),
       publisher: pick(d.publisher, d.press),
       published: pick(d.pubdate, d.publish, d.published),
       source: 'custom',
@@ -306,12 +277,13 @@ function mergeMeta(parts) {
   if (!out.title && !out.cover && !out.authors) return null;
   out.title = out.title || '未知书名';
   out.authors = out.authors || '未知作者';
-  // 不再盲目回退 openlibrary 封面（国内常超时且多为空图）
   out.source = sources.join('+') || 'merged';
   return out;
 }
 
 /**
+ * 主刮削：仅免费源（豆瓣 / 自定义 / Google / OL）
+ * isbn.work 在其后单独补缺，互不影响
  * @returns {{ meta, debug }}
  */
 async function fetchBookMetaDetailed(isbn) {
@@ -320,7 +292,7 @@ async function fetchBookMetaDetailed(isbn) {
     return { meta: null, debug: { error: 'invalid isbn' } };
   }
 
-  const debug = { isbn: clean, tried: [], ok: [], cover_checked: null };
+  const debug = { isbn: clean, tried: [], ok: [], cover_checked: null, isbn_work: null };
 
   async function tryOne(name, fn) {
     debug.tried.push(name);
@@ -338,18 +310,24 @@ async function fetchBookMetaDetailed(isbn) {
     }
   }
 
-  // 中文书优先豆瓣/国内；国外源短超时并行，避免拖死
-  const results = await Promise.all([
+  // —— 主流程：与 isbn.work 完全分离 ——
+  const freeResults = await Promise.all([
     tryOne('douban', fromDouban),
-    tryOne('isbn-work', fromIsbnWork),
     tryOne('custom', fromCustomApi),
     tryOne('google', fromGoogleBooks),
     tryOne('openlibrary', fromOpenLibrary),
   ]);
+  let meta = mergeMeta(freeResults);
 
-  let meta = mergeMeta(results);
+  // —— 独立补缺：仅缺书名/封面且配置了 key 时 ——
+  try {
+    const filled = await isbnWork.fillGaps(meta, clean);
+    debug.isbn_work = filled.debug;
+    if (filled.meta) meta = filled.meta;
+  } catch (e) {
+    debug.isbn_work = { error: e.message || String(e) };
+  }
 
-  // 有候选封面则探测可达性；失败则清空，避免前端裂图
   if (meta && meta.cover) {
     const okCover = await probeCover(meta.cover);
     debug.cover_checked = okCover ? 'ok' : 'bad';
@@ -371,4 +349,5 @@ module.exports = {
   fetchBookMetaDetailed,
   cleanCover,
   probeCover,
+  isbnWork,
 };
