@@ -290,33 +290,37 @@ async function initDb() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
 
-    // 刮削全程日志：请求了谁、传了什么、返回了什么（可从库查）
-    await conn.query(`
-      CREATE TABLE IF NOT EXISTS scrape_logs (
-        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-        run_id VARCHAR(36) NOT NULL,
-        isbn VARCHAR(20) NULL,
-        event VARCHAR(64) NOT NULL,
-        site VARCHAR(64) NULL,
-        phase VARCHAR(32) NULL,
-        ok TINYINT(1) NULL,
-        http_status INT NULL,
-        url VARCHAR(1024) NULL,
-        request_json MEDIUMTEXT NULL,
-        response_json MEDIUMTEXT NULL,
-        response_body MEDIUMTEXT NULL,
-        meta_json TEXT NULL,
-        error_text VARCHAR(1024) NULL,
-        elapsed_ms INT NULL,
-        summary VARCHAR(512) NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        KEY idx_scrape_run (run_id),
-        KEY idx_scrape_isbn (isbn),
-        KEY idx_scrape_created (created_at),
-        KEY idx_scrape_event (event),
-        KEY idx_scrape_site (site)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
+    // 刮削全程日志（失败不阻断启动）
+    try {
+      await conn.query(`
+        CREATE TABLE IF NOT EXISTS scrape_logs (
+          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+          run_id VARCHAR(36) NOT NULL,
+          isbn VARCHAR(20) NULL,
+          event VARCHAR(64) NOT NULL,
+          site VARCHAR(64) NULL,
+          phase VARCHAR(32) NULL,
+          ok TINYINT(1) NULL,
+          http_status INT NULL,
+          url VARCHAR(1024) NULL,
+          request_json MEDIUMTEXT NULL,
+          response_json MEDIUMTEXT NULL,
+          response_body MEDIUMTEXT NULL,
+          meta_json TEXT NULL,
+          error_text VARCHAR(1024) NULL,
+          elapsed_ms INT NULL,
+          summary VARCHAR(512) NULL,
+          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          KEY idx_scrape_run (run_id),
+          KEY idx_scrape_isbn (isbn),
+          KEY idx_scrape_created (created_at),
+          KEY idx_scrape_event (event),
+          KEY idx_scrape_site (site)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+    } catch (e) {
+      console.error('[initDb] scrape_logs table:', e.message || e);
+    }
     // 新用户默认无群组，由管理员分配；公开馆对所有登录用户可见
   } finally {
     conn.release();

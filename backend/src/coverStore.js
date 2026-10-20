@@ -6,7 +6,17 @@ const path = require('path');
 const crypto = require('crypto');
 
 const COVER_DIR = path.join(__dirname, '..', 'data', 'covers');
-if (!fs.existsSync(COVER_DIR)) fs.mkdirSync(COVER_DIR, { recursive: true });
+
+function ensureCoverDir() {
+  try {
+    if (!fs.existsSync(COVER_DIR)) fs.mkdirSync(COVER_DIR, { recursive: true });
+    return true;
+  } catch (e) {
+    console.error('[coverStore] mkdir failed', COVER_DIR, e.message || e);
+    return false;
+  }
+}
+ensureCoverDir();
 
 const MIN_BYTES = 5000;
 const MIN_W = 100;
@@ -194,10 +204,16 @@ function saveCover(isbn, buf, contentType, srcUrl) {
     .replace(/[^0-9Xx]/g, '')
     .toUpperCase();
   if (!key || !buf || !buf.length) return null;
+  if (!ensureCoverDir()) return null;
   const ext = extFromCt(contentType, srcUrl);
   const name = `${key}${ext}`;
   const full = path.join(COVER_DIR, name);
-  fs.writeFileSync(full, buf);
+  try {
+    fs.writeFileSync(full, buf);
+  } catch (e) {
+    console.error('[coverStore] write failed', full, e.message || e);
+    return null;
+  }
   // 清掉同 isbn 其它后缀
   for (const e of ['.jpg', '.jpeg', '.png', '.webp', '.gif']) {
     if (e === ext) continue;
