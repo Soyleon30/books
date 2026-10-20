@@ -2393,8 +2393,8 @@
           coverImg(b.cover, 56, 72) +
           '<div style="flex:1;min-width:0"><b>' +
           esc(b.title) +
-          (locked
-            ? ' <span style="font-size:11px;color:var(--warn-text);font-weight:700">🔒锁定</span>'
+          (isAdmin() && locked
+            ? ' <span style="font-size:11px;color:var(--warn-text);font-weight:700">锁定</span>'
             : '') +
           '</b><div style="font-size:12px;color:var(--muted)">' +
           esc(b.authors || '') +
