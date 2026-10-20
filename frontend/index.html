@@ -266,8 +266,16 @@
     .login-card input{width:100%;border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:15px;margin-bottom:12px;background:#fff;color:var(--text)}
     .login-card .btn{margin-top:4px}
     .login-err{color:var(--err-text);font-size:13px;text-align:center;min-height:1.2em;margin-bottom:8px}
-    .user-bar{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px;font-size:12px;opacity:.95}
+    .user-bar{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px;font-size:12px;opacity:.95;flex-wrap:wrap}
     .user-bar button{border:0;background:rgba(255,255,255,.16);color:var(--on-primary);border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer}
+    .lang-bar{display:flex;gap:4px;align-items:center;flex-wrap:wrap}
+    .lang-bar button{
+      border:0;background:rgba(255,255,255,.12);color:var(--on-primary);
+      border-radius:8px;padding:5px 9px;font-size:11px;font-weight:700;cursor:pointer;
+      min-height:28px;-webkit-tap-highlight-color:transparent
+    }
+    .lang-bar button.on{background:#fff;color:var(--primary)}
+    .login-lang{display:flex;justify-content:center;gap:6px;margin-bottom:14px}
     .theme-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px}
     .theme-opt{border:1px solid var(--line);border-radius:12px;padding:10px;background:#fff;cursor:pointer;text-align:left}
     .theme-opt.on{border-color:var(--primary);box-shadow:0 0 0 2px var(--primary-soft)}
@@ -281,12 +289,13 @@
 
 <div id="login-page" class="hide">
   <div class="login-card">
-    <h1>图书管理</h1>
-    <p>请登录后使用（账号由管理员创建）</p>
+    <div class="login-lang lang-bar" id="login-lang"></div>
+    <h1 data-i18n="app_title">图书管理</h1>
+    <p data-i18n="login_hint">请登录后使用（账号由管理员创建）</p>
     <div class="login-err" id="login-err"></div>
-    <input id="login-user" type="text" placeholder="用户名" autocomplete="username">
-    <input id="login-pass" type="password" placeholder="密码" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
-    <button type="button" class="btn btn-main" onclick="doLogin()">登录</button>
+    <input id="login-user" type="text" data-i18n-placeholder="ph_username" placeholder="用户名" autocomplete="username">
+    <input id="login-pass" type="password" data-i18n-placeholder="ph_password" placeholder="密码" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+    <button type="button" class="btn btn-main" onclick="doLogin()" data-i18n="btn_login">登录</button>
   </div>
 </div>
 
@@ -294,43 +303,44 @@
   <div class="hdr">
     <div class="hdr-top">
       <div class="hdr-brand">
-        <div><p class="title">图书管理</p><p class="sub">ISBN 扫码 · 图书管理</p></div>
+        <div><p class="title" data-i18n="app_title">图书管理</p><p class="sub" data-i18n="app_sub">ISBN 扫码 · 图书管理</p></div>
       </div>
       <div class="tabs">
         <div class="tabs-main">
-          <button type="button" id="t1" onclick="showTab(1)">藏书</button>
-          <button type="button" id="t2" onclick="showTab(2)">馆</button>
-          <button type="button" id="t3" onclick="showTab(3)">账号</button>
-          <button type="button" id="t4" class="hide" onclick="showTab(4)">群组</button>
-          <button type="button" id="t5" class="hide" onclick="showTab(5)">审计</button>
-          <button type="button" id="t6" class="hide" onclick="showTab(6)">刮削</button>
+          <button type="button" id="t1" onclick="showTab(1)" data-i18n="tab_books">藏书</button>
+          <button type="button" id="t2" onclick="showTab(2)" data-i18n="tab_libs">馆</button>
+          <button type="button" id="t3" onclick="showTab(3)" data-i18n="tab_account">账号</button>
+          <button type="button" id="t4" class="hide" onclick="showTab(4)" data-i18n="tab_groups">群组</button>
+          <button type="button" id="t5" class="hide" onclick="showTab(5)" data-i18n="tab_audit">审计</button>
+          <button type="button" id="t6" class="hide" onclick="showTab(6)" data-i18n="tab_scrape_log">刮削</button>
         </div>
         <div class="tabs-scan">
-          <button type="button" class="on" id="t0" onclick="showTab(0)">扫描</button>
+          <button type="button" class="on" id="t0" onclick="showTab(0)" data-i18n="tab_scan">扫描</button>
         </div>
       </div>
     </div>
     <div class="lib">
-      <span style="font-size:12px">馆</span>
-      <select id="sel" onchange="onLib()"><option value="">请选择</option></select>
+      <span style="font-size:12px" data-i18n="label_lib">馆</span>
+      <select id="sel" onchange="onLib()"><option value="" data-i18n="ph_select">请选择</option></select>
     </div>
     <div class="user-bar">
       <span id="who">—</span>
-      <span>
-        <button type="button" onclick="doLogout()">退出</button>
+      <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span class="lang-bar" id="app-lang"></span>
+        <button type="button" onclick="doLogout()" data-i18n="btn_logout">退出</button>
       </span>
     </div>
   </div>
 
   <div id="p0" class="pane">
-    <div class="status" id="st">准备中…</div>
-    <p class="hint">对准 ISBN 条码 <b>拍照</b> 或从相册选图，识别更稳。</p>
+    <div class="status" id="st" data-i18n="st_ready">准备中…</div>
+    <p class="hint" data-i18n-html="scan_hint">对准 ISBN 条码 <b>拍照</b> 或从相册选图，识别更稳。</p>
     <label class="file-main">
-      <span class="btn btn-file">拍照 / 选图识别 ISBN</span>
+      <span class="btn btn-file" data-i18n="btn_photo">拍照 / 选图识别 ISBN</span>
       <input id="file" type="file" accept="image/*" capture="environment" onchange="fromFile(event)">
     </label>
     <label class="file-main" style="margin-top:8px">
-      <span class="btn btn-batch">批量选图入库（可多选）</span>
+      <span class="btn btn-batch" data-i18n="btn_batch">批量选图入库（可多选）</span>
       <input id="file-batch" type="file" accept="image/*" multiple onchange="fromFilesBatch(event)">
     </label>
     <!-- 实时摄像头扫描：体验不如拍照，暂时关闭
@@ -344,7 +354,7 @@
     </div>
     -->
     <div class="row" style="margin-top:12px">
-      <button type="button" class="btn" onclick="manual()">手动输入 ISBN</button>
+      <button type="button" class="btn" onclick="manual()" data-i18n="btn_manual">手动输入 ISBN</button>
     </div>
     <div id="log"></div>
     <!-- 保留隐藏 video 节点，避免旧脚本空引用；实时扫描关闭后不用 -->
@@ -353,113 +363,113 @@
 
   <div id="p1" class="pane hide">
     <div class="srow">
-      <input id="q" type="text" placeholder="搜索" onkeydown="if(event.key==='Enter')search()">
-      <button type="button" onclick="search()">搜索</button>
+      <input id="q" type="text" data-i18n-placeholder="ph_search" placeholder="搜索" onkeydown="if(event.key==='Enter')search()">
+      <button type="button" onclick="search()" data-i18n="btn_search">搜索</button>
     </div>
-    <button type="button" class="btn" style="margin-bottom:8px;background:var(--accent-2);color:#fff;font-size:14px" onclick="scrapeMissing()">批量刮削未知书名</button>
+    <button type="button" class="btn" style="margin-bottom:8px;background:var(--accent-2);color:#fff;font-size:14px" onclick="scrapeMissing()" data-i18n="btn_scrape_missing">批量刮削未知书名</button>
     <div id="admin-book-bulk" class="hide" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
-      <button type="button" class="btn" style="flex:1;min-width:120px;margin:0;background:var(--warn-text);color:#fff;font-size:13px;padding:10px" onclick="lockLibraryAll(true)">整馆全部锁定</button>
-      <button type="button" class="btn" style="flex:1;min-width:120px;margin:0;background:#fff;border:1px solid var(--line);color:var(--text);font-size:13px;padding:10px;font-weight:600" onclick="lockLibraryAll(false)">整馆全部解锁</button>
+      <button type="button" class="btn" style="flex:1;min-width:120px;margin:0;background:var(--warn-text);color:#fff;font-size:13px;padding:10px" onclick="lockLibraryAll(true)" data-i18n="btn_lock_all">整馆全部锁定</button>
+      <button type="button" class="btn" style="flex:1;min-width:120px;margin:0;background:#fff;border:1px solid var(--line);color:var(--text);font-size:13px;padding:10px;font-weight:600" onclick="lockLibraryAll(false)" data-i18n="btn_unlock_all">整馆全部解锁</button>
     </div>
     <div id="list" class="muted">…</div>
   </div>
 
   <div id="p2" class="pane hide">
-    <p id="lib-user-hint" class="hide" style="font-size:12px;color:var(--muted);margin:0 0 10px">普通用户可自建 <b>1</b> 个图书馆，仅自己可见。扩大到同组/全员请联系管理员。</p>
-    <input id="n" type="text" placeholder="新图书馆名称">
-    <input id="d" type="text" placeholder="备注">
+    <p id="lib-user-hint" class="hide" style="font-size:12px;color:var(--muted);margin:0 0 10px" data-i18n-html="lib_user_hint">普通用户可自建 <b>1</b> 个图书馆，仅自己可见。扩大到同组/全员请联系管理员。</p>
+    <input id="n" type="text" data-i18n-placeholder="ph_lib_name" placeholder="新图书馆名称">
+    <input id="d" type="text" data-i18n-placeholder="ph_note" placeholder="备注">
     <div id="lib-vis-box" class="hide">
-      <label style="display:block;font-size:13px;color:var(--muted);margin:8px 0 4px">谁能看到这座馆（仅管理员可设）</label>
+      <label style="display:block;font-size:13px;color:var(--muted);margin:8px 0 4px" data-i18n="label_lib_vis">谁能看到这座馆（仅管理员可设）</label>
       <select id="lib-vis" onchange="onLibVisChange()">
-        <option value="private" selected>仅创建者本人</option>
-        <option value="group">同组可见</option>
-        <option value="public">全部用户可见</option>
-        <option value="custom">多个指定群组</option>
+        <option value="private" selected data-i18n="vis_private">仅创建者本人</option>
+        <option value="group" data-i18n="vis_group">同组可见</option>
+        <option value="public" data-i18n="vis_public">全部用户可见</option>
+        <option value="custom" data-i18n="vis_custom">多个指定群组</option>
       </select>
       <p id="lib-vis-help" style="font-size:12px;color:var(--muted);margin:0 0 8px;line-height:1.45"></p>
       <div id="lib-gids-wrap">
-        <label id="lib-gids-label" style="display:block;font-size:13px;color:var(--muted);margin:4px 0">选择群组</label>
+        <label id="lib-gids-label" style="display:block;font-size:13px;color:var(--muted);margin:4px 0" data-i18n="label_pick_groups">选择群组</label>
         <div id="lib-gids" style="max-height:140px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:8px;margin-bottom:10px;font-size:13px"></div>
       </div>
     </div>
-    <button type="button" class="btn btn-main" onclick="createLib()">创建图书馆</button>
-    <button type="button" id="btn-add-default-lib" class="btn hide" style="margin-top:8px;background:#fff;border:1px solid var(--line);color:#374151;font-size:14px;font-weight:600" onclick="createDefaultLib()">添加默认图书馆</button>
+    <button type="button" class="btn btn-main" onclick="createLib()" data-i18n="btn_create_lib">创建图书馆</button>
+    <button type="button" id="btn-add-default-lib" class="btn hide" style="margin-top:8px;background:#fff;border:1px solid var(--line);color:#374151;font-size:14px;font-weight:600" onclick="createDefaultLib()" data-i18n="btn_add_default_lib">添加默认图书馆</button>
     <div id="migrate-default-box" class="hide" style="margin-top:14px;padding:12px;border:1px solid #fde68a;background:#fffbeb;border-radius:12px">
-      <p style="margin:0 0 8px;font-size:13px;font-weight:600;color:#92400e">默认图书馆 · 藏书迁移</p>
-      <p style="margin:0 0 10px;font-size:12px;color:#a16207">将默认馆藏书迁到目标馆，默认馆保留。删馆请用列表里的删除（仅管理员）。目标已有相同 ISBN 则跳过。</p>
+      <p style="margin:0 0 8px;font-size:13px;font-weight:600;color:#92400e" data-i18n="migrate_title">默认图书馆 · 藏书迁移</p>
+      <p style="margin:0 0 10px;font-size:12px;color:#a16207" data-i18n="migrate_hint">将默认馆藏书迁到目标馆，默认馆保留。删馆请用列表里的删除（仅管理员）。目标已有相同 ISBN 则跳过。</p>
       <select id="migrate-target"></select>
-      <button type="button" class="btn btn-main" style="margin-top:4px;background:#b45309;color:#fff" onclick="migrateDefaultLib()">迁移藏书</button>
+      <button type="button" class="btn btn-main" style="margin-top:4px;background:#b45309;color:#fff" onclick="migrateDefaultLib()" data-i18n="btn_migrate">迁移藏书</button>
     </div>
     <div id="libs" style="margin-top:12px"></div>
   </div>
 
   <div id="p4" class="pane hide">
-    <p id="group-hint" style="font-size:13px;color:var(--muted);margin:0 0 10px">群组</p>
+    <p id="group-hint" style="font-size:13px;color:var(--muted);margin:0 0 10px" data-i18n="tab_groups">群组</p>
     <div id="group-create-box">
-      <input id="gn" type="text" placeholder="新群组名称">
-      <input id="gd" type="text" placeholder="备注">
-      <button type="button" class="btn btn-main" onclick="createGroup()">创建群组</button>
+      <input id="gn" type="text" data-i18n-placeholder="ph_group_name" placeholder="新群组名称">
+      <input id="gd" type="text" data-i18n-placeholder="ph_note" placeholder="备注">
+      <button type="button" class="btn btn-main" onclick="createGroup()" data-i18n="btn_create_group">创建群组</button>
     </div>
     <div id="groups" style="margin-top:14px"></div>
   </div>
 
   
   <div id="p5" class="pane hide">
-    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">操作审计：谁点了什么（不含外站返回）</p>
+    <p style="font-size:13px;color:var(--muted);margin:0 0 10px" data-i18n="audit_hint">操作审计：谁点了什么（不含外站返回）</p>
     <div class="srow">
-      <input id="log-q" type="text" placeholder="搜索用户/动作/详情" onkeydown="if(event.key==='Enter')loadAuditLogs(1)">
-      <button type="button" onclick="loadAuditLogs(1)">搜索</button>
+      <input id="log-q" type="text" data-i18n-placeholder="ph_audit_search" placeholder="搜索用户/动作/详情" onkeydown="if(event.key==='Enter')loadAuditLogs(1)">
+      <button type="button" onclick="loadAuditLogs(1)" data-i18n="btn_search">搜索</button>
     </div>
     <select id="log-action" onchange="loadAuditLogs(1)" style="margin-bottom:8px">
-      <option value="">全部动作</option>
+      <option value="" data-i18n="all_actions">全部动作</option>
     </select>
     <div id="audit-list" class="muted">…</div>
     <div id="audit-pager" style="display:flex;gap:8px;justify-content:center;margin-top:12px"></div>
   </div>
 
   <div id="p6" class="pane hide">
-    <p style="font-size:14px;font-weight:600;margin:0 0 6px">刮削日志</p>
-    <p style="font-size:12px;color:var(--muted);margin:0 0 10px">最近批次在上。点某批查看该次请求了哪些站、传了什么、返回了什么（时间正序）。</p>
+    <p style="font-size:14px;font-weight:600;margin:0 0 6px" data-i18n="scrape_log_title">刮削日志</p>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 10px" data-i18n="scrape_log_hint">最近批次在上。点某批查看该次请求了哪些站、传了什么、返回了什么（时间正序）。</p>
     <div class="srow">
-      <input id="scrape-log-isbn" type="text" placeholder="ISBN 过滤" style="flex:1" onkeydown="if(event.key==='Enter')loadScrapeRuns()">
-      <button type="button" onclick="loadScrapeRuns()">刷新批次</button>
+      <input id="scrape-log-isbn" type="text" data-i18n-placeholder="ph_isbn_filter" placeholder="ISBN 过滤" style="flex:1" onkeydown="if(event.key==='Enter')loadScrapeRuns()">
+      <button type="button" onclick="loadScrapeRuns()" data-i18n="btn_refresh_runs">刷新批次</button>
     </div>
     <div style="display:flex;gap:8px;margin:8px 0;flex-wrap:wrap">
-      <button type="button" class="btn" style="width:auto;padding:6px 12px;font-size:12px" onclick="scrapeLogRunId='';loadScrapeRuns()">全部批次</button>
-      <button type="button" class="btn" style="width:auto;padding:6px 12px;font-size:12px" onclick="loadScrapeLogsRaw()">原始流水</button>
-      <button type="button" class="btn" style="width:auto;padding:6px 12px;font-size:12px" onclick="clearScrapeLogs()">清7天前</button>
+      <button type="button" class="btn" style="width:auto;padding:6px 12px;font-size:12px" onclick="scrapeLogRunId='';loadScrapeRuns()" data-i18n="btn_all_runs">全部批次</button>
+      <button type="button" class="btn" style="width:auto;padding:6px 12px;font-size:12px" onclick="loadScrapeLogsRaw()" data-i18n="btn_raw_logs">原始流水</button>
+      <button type="button" class="btn" style="width:auto;padding:6px 12px;font-size:12px" onclick="clearScrapeLogs()" data-i18n="btn_clear_7d">清7天前</button>
     </div>
     <div id="scrape-log-meta" class="muted" style="font-size:12px;margin-bottom:6px"></div>
     <div id="scrape-run-list" style="margin-bottom:10px"></div>
-    <pre id="scrape-log-box" style="max-height:420px;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;font-size:11px;white-space:pre-wrap;word-break:break-all;margin:0">打开本页自动加载最近批次…</pre>
+    <pre id="scrape-log-box" style="max-height:420px;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;font-size:11px;white-space:pre-wrap;word-break:break-all;margin:0" data-i18n="scrape_log_empty">打开本页自动加载最近批次…</pre>
   </div>
 <div id="p3" class="pane hide">
     
     <div style="margin-bottom:18px;padding-bottom:16px;border-bottom:1px solid var(--line)">
-      <p style="font-size:14px;font-weight:600;margin:0 0 10px">界面配色</p>
-      <p style="font-size:12px;color:var(--muted);margin:0 0 10px">纯色搭配，无渐变。选择后保存到当前账号，换设备登录仍有效。</p>
+      <p style="font-size:14px;font-weight:600;margin:0 0 10px" data-i18n="theme_title">界面配色</p>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 10px" data-i18n="theme_hint">纯色搭配，无渐变。选择后保存到当前账号，换设备登录仍有效。</p>
       <div id="theme-grid" class="theme-grid"></div>
     </div>
 <div style="margin-bottom:16px">
-      <p style="font-size:14px;font-weight:600;margin:0 0 10px">修改我的密码</p>
-      <input id="pwd-old" type="password" placeholder="当前密码" autocomplete="current-password">
-      <input id="pwd-new" type="password" placeholder="新密码（至少6位）" autocomplete="new-password">
-      <input id="pwd-new2" type="password" placeholder="再输一次新密码" autocomplete="new-password">
-      <button type="button" class="btn btn-main" onclick="changeMyPassword()">保存新密码</button>
+      <p style="font-size:14px;font-weight:600;margin:0 0 10px" data-i18n="pwd_title">修改我的密码</p>
+      <input id="pwd-old" type="password" data-i18n-placeholder="ph_pwd_old" placeholder="当前密码" autocomplete="current-password">
+      <input id="pwd-new" type="password" data-i18n-placeholder="ph_pwd_new" placeholder="新密码（至少6位）" autocomplete="new-password">
+      <input id="pwd-new2" type="password" data-i18n-placeholder="ph_pwd_new2" placeholder="再输一次新密码" autocomplete="new-password">
+      <button type="button" class="btn btn-main" onclick="changeMyPassword()" data-i18n="btn_save_pwd">保存新密码</button>
     </div>
 
     <div id="admin-users" class="hide">
       <div style="padding-top:16px;border-top:1px solid var(--line)">
-        <p style="font-size:13px;color:var(--muted);margin:0 0 12px">创建用户（无自助注册）。初始密码默认 <b>a123456</b>。新用户默认无群组，可看公开馆；群组在「群组」页分配</p>
-        <input id="nu" type="text" placeholder="新用户名">
-        <input id="nd" type="text" placeholder="显示名（可选）">
-        <label style="display:block;font-size:13px;color:var(--muted);margin-bottom:6px">角色</label>
+        <p style="font-size:13px;color:var(--muted);margin:0 0 12px" data-i18n-html="create_user_hint">创建用户（无自助注册）。初始密码默认 <b>a123456</b>。新用户默认无群组，可看公开馆；群组在「群组」页分配</p>
+        <input id="nu" type="text" data-i18n-placeholder="ph_new_user" placeholder="新用户名">
+        <input id="nd" type="text" data-i18n-placeholder="ph_display_name" placeholder="显示名（可选）">
+        <label style="display:block;font-size:13px;color:var(--muted);margin-bottom:6px" data-i18n="label_role">角色</label>
         <select id="nr">
-          <option value="user">用户（可扫码入库）</option>
-          <option value="viewer">只读（仅搜索查看）</option>
-          <option value="admin">管理员</option>
+          <option value="user" data-i18n="role_user">用户（可扫码入库）</option>
+          <option value="viewer" data-i18n="role_viewer">只读（仅搜索查看）</option>
+          <option value="admin" data-i18n="role_admin">管理员</option>
         </select>
-        <button type="button" class="btn btn-main" onclick="createUser()">创建用户</button>
+        <button type="button" class="btn btn-main" onclick="createUser()" data-i18n="btn_create_user">创建用户</button>
         <div id="users" style="margin-top:14px"></div>
       </div>
     </div>
@@ -470,8 +480,8 @@
   <div class="mbox">
     <div class="mbody" id="dlg-body"></div>
     <div class="mfoot">
-      <button type="button" onclick="closeDlg()">关闭</button>
-      <button type="button" class="go hide" id="dlg-ok">确认</button>
+      <button type="button" onclick="closeDlg()" data-i18n="btn_close">关闭</button>
+      <button type="button" class="go hide" id="dlg-ok" data-i18n="btn_ok">确认</button>
     </div>
   </div>
 </div>
@@ -481,6 +491,542 @@
   const API = '/api';
   const LS = 'bookScanner_libraryId';
   const LS_TOKEN = 'bookScanner_token';
+  const LS_LANG = 'bookScanner_lang';
+
+  const LANGS = [
+    { id: 'zh', label: '简中', htmlLang: 'zh-CN' },
+    { id: 'zh-TW', label: '繁中', htmlLang: 'zh-TW' },
+    { id: 'en', label: 'EN', htmlLang: 'en' },
+    { id: 'ru', label: 'RU', htmlLang: 'ru' },
+    { id: 'vi', label: 'VI', htmlLang: 'vi' },
+  ];
+
+  const I18N = {
+    zh: {
+      app_title: '图书管理',
+      app_sub: 'ISBN 扫码 · 图书管理',
+      login_hint: '请登录后使用（账号由管理员创建）',
+      ph_username: '用户名',
+      ph_password: '密码',
+      btn_login: '登录',
+      btn_logout: '退出',
+      tab_books: '藏书',
+      tab_libs: '馆',
+      tab_account: '账号',
+      tab_groups: '群组',
+      tab_audit: '审计',
+      tab_scrape_log: '刮削',
+      tab_scan: '扫描',
+      label_lib: '馆',
+      ph_select: '请选择',
+      st_ready: '准备中…',
+      scan_hint: '对准 ISBN 条码 <b>拍照</b> 或从相册选图，识别更稳。',
+      btn_photo: '拍照 / 选图识别 ISBN',
+      btn_batch: '批量选图入库（可多选）',
+      btn_manual: '手动输入 ISBN',
+      ph_search: '搜索',
+      btn_search: '搜索',
+      btn_scrape_missing: '批量刮削未知书名',
+      btn_lock_all: '整馆全部锁定',
+      btn_unlock_all: '整馆全部解锁',
+      lib_user_hint: '普通用户可自建 <b>1</b> 个图书馆，仅自己可见。扩大到同组/全员请联系管理员。',
+      ph_lib_name: '新图书馆名称',
+      ph_note: '备注',
+      label_lib_vis: '谁能看到这座馆（仅管理员可设）',
+      vis_private: '仅创建者本人',
+      vis_group: '同组可见',
+      vis_public: '全部用户可见',
+      vis_custom: '多个指定群组',
+      label_pick_groups: '选择群组',
+      btn_create_lib: '创建图书馆',
+      btn_add_default_lib: '添加默认图书馆',
+      migrate_title: '默认图书馆 · 藏书迁移',
+      migrate_hint: '将默认馆藏书迁到目标馆，默认馆保留。删馆请用列表里的删除（仅管理员）。目标已有相同 ISBN 则跳过。',
+      btn_migrate: '迁移藏书',
+      ph_group_name: '新群组名称',
+      btn_create_group: '创建群组',
+      audit_hint: '操作审计：谁点了什么（不含外站返回）',
+      ph_audit_search: '搜索用户/动作/详情',
+      all_actions: '全部动作',
+      scrape_log_title: '刮削日志',
+      scrape_log_hint: '最近批次在上。点某批查看该次请求了哪些站、传了什么、返回了什么（时间正序）。',
+      ph_isbn_filter: 'ISBN 过滤',
+      btn_refresh_runs: '刷新批次',
+      btn_all_runs: '全部批次',
+      btn_raw_logs: '原始流水',
+      btn_clear_7d: '清7天前',
+      scrape_log_empty: '打开本页自动加载最近批次…',
+      theme_title: '界面配色',
+      theme_hint: '纯色搭配，无渐变。选择后保存到当前账号，换设备登录仍有效。',
+      pwd_title: '修改我的密码',
+      ph_pwd_old: '当前密码',
+      ph_pwd_new: '新密码（至少6位）',
+      ph_pwd_new2: '再输一次新密码',
+      btn_save_pwd: '保存新密码',
+      create_user_hint: '创建用户（无自助注册）。初始密码默认 <b>a123456</b>。新用户默认无群组，可看公开馆；群组在「群组」页分配',
+      ph_new_user: '新用户名',
+      ph_display_name: '显示名（可选）',
+      label_role: '角色',
+      role_user: '用户（可扫码入库）',
+      role_viewer: '只读（仅搜索查看）',
+      role_admin: '管理员',
+      role_user_short: '用户',
+      role_viewer_short: '只读',
+      role_admin_short: '管理员',
+      btn_create_user: '创建用户',
+      btn_close: '关闭',
+      btn_ok: '确认',
+      btn_scrape: '重新刮削',
+      btn_scrape_fill: '刮削补全',
+      btn_lock: '锁定',
+      btn_unlock: '解锁',
+      btn_move: '移馆',
+      btn_delete: '删除',
+      label_locked: '锁定',
+      pick_lib: '请选择',
+      cur_lib: '当前：',
+      please_pick_lib: '请选择图书馆',
+      no_books: '无',
+      loading: '…',
+      pick_lib_first: '请先选馆',
+    },
+    'zh-TW': {
+      app_title: '圖書管理',
+      app_sub: 'ISBN 掃碼 · 圖書管理',
+      login_hint: '請登入後使用（帳號由管理員建立）',
+      ph_username: '使用者名稱',
+      ph_password: '密碼',
+      btn_login: '登入',
+      btn_logout: '登出',
+      tab_books: '藏書',
+      tab_libs: '館',
+      tab_account: '帳號',
+      tab_groups: '群組',
+      tab_audit: '稽核',
+      tab_scrape_log: '刮削',
+      tab_scan: '掃描',
+      label_lib: '館',
+      ph_select: '請選擇',
+      st_ready: '準備中…',
+      scan_hint: '對準 ISBN 條碼 <b>拍照</b> 或從相簿選圖，識別更穩。',
+      btn_photo: '拍照 / 選圖識別 ISBN',
+      btn_batch: '批次選圖入庫（可多選）',
+      btn_manual: '手動輸入 ISBN',
+      ph_search: '搜尋',
+      btn_search: '搜尋',
+      btn_scrape_missing: '批次刮削未知書名',
+      btn_lock_all: '整館全部鎖定',
+      btn_unlock_all: '整館全部解鎖',
+      lib_user_hint: '一般使用者可自建 <b>1</b> 個圖書館，僅自己可見。擴大到同組/全員請聯繫管理員。',
+      ph_lib_name: '新圖書館名稱',
+      ph_note: '備註',
+      label_lib_vis: '誰能看到這座館（僅管理員可設）',
+      vis_private: '僅建立者本人',
+      vis_group: '同組可見',
+      vis_public: '全部使用者可見',
+      vis_custom: '多個指定群組',
+      label_pick_groups: '選擇群組',
+      btn_create_lib: '建立圖書館',
+      btn_add_default_lib: '新增預設圖書館',
+      migrate_title: '預設圖書館 · 藏書遷移',
+      migrate_hint: '將預設館藏書遷到目標館，預設館保留。刪館請用列表裡的刪除（僅管理員）。目標已有相同 ISBN 則跳過。',
+      btn_migrate: '遷移藏書',
+      ph_group_name: '新群組名稱',
+      btn_create_group: '建立群組',
+      audit_hint: '操作稽核：誰點了什麼（不含外站返回）',
+      ph_audit_search: '搜尋使用者/動作/詳情',
+      all_actions: '全部動作',
+      scrape_log_title: '刮削日誌',
+      scrape_log_hint: '最近批次在上。點某批查看該次請求了哪些站、傳了什麼、返回了什麼（時間正序）。',
+      ph_isbn_filter: 'ISBN 過濾',
+      btn_refresh_runs: '重新整理批次',
+      btn_all_runs: '全部批次',
+      btn_raw_logs: '原始流水',
+      btn_clear_7d: '清7天前',
+      scrape_log_empty: '開啟本頁自動載入最近批次…',
+      theme_title: '介面配色',
+      theme_hint: '純色搭配，無漸層。選擇後儲存到目前帳號，換裝置登入仍有效。',
+      pwd_title: '修改我的密碼',
+      ph_pwd_old: '目前密碼',
+      ph_pwd_new: '新密碼（至少6位）',
+      ph_pwd_new2: '再輸入一次新密碼',
+      btn_save_pwd: '儲存新密碼',
+      create_user_hint: '建立使用者（無自助註冊）。初始密碼預設 <b>a123456</b>。新使用者預設無群組，可看公開館；群組在「群組」頁分配',
+      ph_new_user: '新使用者名稱',
+      ph_display_name: '顯示名稱（可選）',
+      label_role: '角色',
+      role_user: '使用者（可掃碼入庫）',
+      role_viewer: '唯讀（僅搜尋查看）',
+      role_admin: '管理員',
+      role_user_short: '使用者',
+      role_viewer_short: '唯讀',
+      role_admin_short: '管理員',
+      btn_create_user: '建立使用者',
+      btn_close: '關閉',
+      btn_ok: '確認',
+      btn_scrape: '重新刮削',
+      btn_scrape_fill: '刮削補全',
+      btn_lock: '鎖定',
+      btn_unlock: '解鎖',
+      btn_move: '移館',
+      btn_delete: '刪除',
+      label_locked: '鎖定',
+      pick_lib: '請選擇',
+      cur_lib: '目前：',
+      please_pick_lib: '請選擇圖書館',
+      no_books: '無',
+      loading: '…',
+      pick_lib_first: '請先選館',
+    },
+    en: {
+      app_title: 'Book Manager',
+      app_sub: 'ISBN scan · library',
+      login_hint: 'Please sign in (accounts are created by admin)',
+      ph_username: 'Username',
+      ph_password: 'Password',
+      btn_login: 'Sign in',
+      btn_logout: 'Sign out',
+      tab_books: 'Books',
+      tab_libs: 'Libraries',
+      tab_account: 'Account',
+      tab_groups: 'Groups',
+      tab_audit: 'Audit',
+      tab_scrape_log: 'Scrape',
+      tab_scan: 'Scan',
+      label_lib: 'Library',
+      ph_select: 'Select',
+      st_ready: 'Ready…',
+      scan_hint: 'Point at the ISBN barcode and <b>take a photo</b> or pick from gallery.',
+      btn_photo: 'Photo / pick image for ISBN',
+      btn_batch: 'Batch import images',
+      btn_manual: 'Enter ISBN manually',
+      ph_search: 'Search',
+      btn_search: 'Search',
+      btn_scrape_missing: 'Scrape missing titles',
+      btn_lock_all: 'Lock entire library',
+      btn_unlock_all: 'Unlock entire library',
+      lib_user_hint: 'Users can create <b>1</b> private library. Ask admin to share with group/all.',
+      ph_lib_name: 'New library name',
+      ph_note: 'Note',
+      label_lib_vis: 'Who can see this library (admin only)',
+      vis_private: 'Owner only',
+      vis_group: 'Same group',
+      vis_public: 'All users',
+      vis_custom: 'Selected groups',
+      label_pick_groups: 'Select groups',
+      btn_create_lib: 'Create library',
+      btn_add_default_lib: 'Add default library',
+      migrate_title: 'Default library · migrate books',
+      migrate_hint: 'Move books from default library to target. Same ISBN in target is skipped.',
+      btn_migrate: 'Migrate books',
+      ph_group_name: 'New group name',
+      btn_create_group: 'Create group',
+      audit_hint: 'Audit log: who did what',
+      ph_audit_search: 'Search user/action/detail',
+      all_actions: 'All actions',
+      scrape_log_title: 'Scrape logs',
+      scrape_log_hint: 'Latest runs first. Tap a run to see request/response details.',
+      ph_isbn_filter: 'Filter by ISBN',
+      btn_refresh_runs: 'Refresh runs',
+      btn_all_runs: 'All runs',
+      btn_raw_logs: 'Raw logs',
+      btn_clear_7d: 'Clear >7 days',
+      scrape_log_empty: 'Open this page to load recent runs…',
+      theme_title: 'Theme',
+      theme_hint: 'Solid colors. Saved to your account after sign-in.',
+      pwd_title: 'Change password',
+      ph_pwd_old: 'Current password',
+      ph_pwd_new: 'New password (min 6)',
+      ph_pwd_new2: 'Confirm new password',
+      btn_save_pwd: 'Save password',
+      create_user_hint: 'Create user (no self-signup). Default password <b>a123456</b>.',
+      ph_new_user: 'New username',
+      ph_display_name: 'Display name (optional)',
+      label_role: 'Role',
+      role_user: 'User (can scan)',
+      role_viewer: 'Viewer (read-only)',
+      role_admin: 'Admin',
+      role_user_short: 'User',
+      role_viewer_short: 'Viewer',
+      role_admin_short: 'Admin',
+      btn_create_user: 'Create user',
+      btn_close: 'Close',
+      btn_ok: 'OK',
+      btn_scrape: 'Re-scrape',
+      btn_scrape_fill: 'Fill metadata',
+      btn_lock: 'Lock',
+      btn_unlock: 'Unlock',
+      btn_move: 'Move',
+      btn_delete: 'Delete',
+      label_locked: 'Locked',
+      pick_lib: 'Select',
+      cur_lib: 'Current: ',
+      please_pick_lib: 'Select a library',
+      no_books: 'None',
+      loading: '…',
+      pick_lib_first: 'Select a library first',
+    },
+    ru: {
+      app_title: 'Книги',
+      app_sub: 'ISBN · библиотека',
+      login_hint: 'Войдите (аккаунты создаёт администратор)',
+      ph_username: 'Логин',
+      ph_password: 'Пароль',
+      btn_login: 'Войти',
+      btn_logout: 'Выйти',
+      tab_books: 'Книги',
+      tab_libs: 'Библиотеки',
+      tab_account: 'Аккаунт',
+      tab_groups: 'Группы',
+      tab_audit: 'Аудит',
+      tab_scrape_log: 'Скрап',
+      tab_scan: 'Скан',
+      label_lib: 'Библиотека',
+      ph_select: 'Выберите',
+      st_ready: 'Готово…',
+      scan_hint: 'Наведите на ISBN и <b>сделайте фото</b> или выберите из галереи.',
+      btn_photo: 'Фото / выбрать ISBN',
+      btn_batch: 'Пакетный импорт',
+      btn_manual: 'Ввести ISBN',
+      ph_search: 'Поиск',
+      btn_search: 'Поиск',
+      btn_scrape_missing: 'Дополнить без названия',
+      btn_lock_all: 'Заблокировать все',
+      btn_unlock_all: 'Разблокировать все',
+      lib_user_hint: 'Пользователь может создать <b>1</b> личную библиотеку.',
+      ph_lib_name: 'Название библиотеки',
+      ph_note: 'Заметка',
+      label_lib_vis: 'Кто видит библиотеку (только админ)',
+      vis_private: 'Только владелец',
+      vis_group: 'Группа',
+      vis_public: 'Все пользователи',
+      vis_custom: 'Выбранные группы',
+      label_pick_groups: 'Выбрать группы',
+      btn_create_lib: 'Создать библиотеку',
+      btn_add_default_lib: 'Добавить библиотеку по умолчанию',
+      migrate_title: 'Библиотека по умолчанию · перенос',
+      migrate_hint: 'Перенос книг в целевую библиотеку. Дубликаты ISBN пропускаются.',
+      btn_migrate: 'Перенести',
+      ph_group_name: 'Название группы',
+      btn_create_group: 'Создать группу',
+      audit_hint: 'Журнал действий',
+      ph_audit_search: 'Поиск пользователя/действия',
+      all_actions: 'Все действия',
+      scrape_log_title: 'Логи скрапинга',
+      scrape_log_hint: 'Свежие запуски сверху. Нажмите для деталей запроса/ответа.',
+      ph_isbn_filter: 'Фильтр ISBN',
+      btn_refresh_runs: 'Обновить',
+      btn_all_runs: 'Все запуски',
+      btn_raw_logs: 'Сырые логи',
+      btn_clear_7d: 'Очистить >7 дн.',
+      scrape_log_empty: 'Откройте страницу, чтобы загрузить запуски…',
+      theme_title: 'Тема',
+      theme_hint: 'Сплошные цвета. Сохраняется в аккаунте.',
+      pwd_title: 'Сменить пароль',
+      ph_pwd_old: 'Текущий пароль',
+      ph_pwd_new: 'Новый пароль (мин. 6)',
+      ph_pwd_new2: 'Повторите пароль',
+      btn_save_pwd: 'Сохранить',
+      create_user_hint: 'Создать пользователя. Пароль по умолчанию <b>a123456</b>.',
+      ph_new_user: 'Новый логин',
+      ph_display_name: 'Отображаемое имя',
+      label_role: 'Роль',
+      role_user: 'Пользователь (скан)',
+      role_viewer: 'Только чтение',
+      role_admin: 'Админ',
+      role_user_short: 'Пользователь',
+      role_viewer_short: 'Чтение',
+      role_admin_short: 'Админ',
+      btn_create_user: 'Создать',
+      btn_close: 'Закрыть',
+      btn_ok: 'OK',
+      btn_scrape: 'Скрапить снова',
+      btn_scrape_fill: 'Дополнить',
+      btn_lock: 'Блок',
+      btn_unlock: 'Разблок',
+      btn_move: 'Перенос',
+      btn_delete: 'Удалить',
+      label_locked: 'Блок',
+      pick_lib: 'Выберите',
+      cur_lib: 'Сейчас: ',
+      please_pick_lib: 'Выберите библиотеку',
+      no_books: 'Пусто',
+      loading: '…',
+      pick_lib_first: 'Сначала выберите библиотеку',
+    },
+    vi: {
+      app_title: 'Quản lý sách',
+      app_sub: 'Quét ISBN · thư viện',
+      login_hint: 'Vui lòng đăng nhập (tài khoản do quản trị viên tạo)',
+      ph_username: 'Tên đăng nhập',
+      ph_password: 'Mật khẩu',
+      btn_login: 'Đăng nhập',
+      btn_logout: 'Đăng xuất',
+      tab_books: 'Sách',
+      tab_libs: 'Thư viện',
+      tab_account: 'Tài khoản',
+      tab_groups: 'Nhóm',
+      tab_audit: 'Nhật ký',
+      tab_scrape_log: 'Cào dữ liệu',
+      tab_scan: 'Quét',
+      label_lib: 'Thư viện',
+      ph_select: 'Chọn',
+      st_ready: 'Đang sẵn sàng…',
+      scan_hint: 'Hướng vào mã vạch ISBN rồi <b>chụp ảnh</b> hoặc chọn từ thư viện ảnh.',
+      btn_photo: 'Chụp / chọn ảnh ISBN',
+      btn_batch: 'Nhập hàng loạt ảnh',
+      btn_manual: 'Nhập ISBN thủ công',
+      ph_search: 'Tìm kiếm',
+      btn_search: 'Tìm',
+      btn_scrape_missing: 'Bổ sung sách thiếu tên',
+      btn_lock_all: 'Khóa cả thư viện',
+      btn_unlock_all: 'Mở khóa cả thư viện',
+      lib_user_hint: 'Người dùng có thể tự tạo <b>1</b> thư viện riêng. Muốn chia sẻ nhóm/tất cả hãy liên hệ admin.',
+      ph_lib_name: 'Tên thư viện mới',
+      ph_note: 'Ghi chú',
+      label_lib_vis: 'Ai thấy thư viện này (chỉ admin)',
+      vis_private: 'Chỉ người tạo',
+      vis_group: 'Cùng nhóm',
+      vis_public: 'Tất cả người dùng',
+      vis_custom: 'Nhiều nhóm chỉ định',
+      label_pick_groups: 'Chọn nhóm',
+      btn_create_lib: 'Tạo thư viện',
+      btn_add_default_lib: 'Thêm thư viện mặc định',
+      migrate_title: 'Thư viện mặc định · chuyển sách',
+      migrate_hint: 'Chuyển sách từ thư viện mặc định sang thư viện đích. ISBN trùng sẽ bỏ qua.',
+      btn_migrate: 'Chuyển sách',
+      ph_group_name: 'Tên nhóm mới',
+      btn_create_group: 'Tạo nhóm',
+      audit_hint: 'Nhật ký thao tác: ai làm gì',
+      ph_audit_search: 'Tìm người dùng/hành động/chi tiết',
+      all_actions: 'Tất cả hành động',
+      scrape_log_title: 'Nhật ký cào dữ liệu',
+      scrape_log_hint: 'Lần chạy mới nhất ở trên. Bấm để xem request/response.',
+      ph_isbn_filter: 'Lọc ISBN',
+      btn_refresh_runs: 'Làm mới',
+      btn_all_runs: 'Tất cả lần chạy',
+      btn_raw_logs: 'Log thô',
+      btn_clear_7d: 'Xóa >7 ngày',
+      scrape_log_empty: 'Mở trang này để tải các lần chạy gần đây…',
+      theme_title: 'Giao diện',
+      theme_hint: 'Màu đặc, không gradient. Lưu theo tài khoản sau khi đăng nhập.',
+      pwd_title: 'Đổi mật khẩu',
+      ph_pwd_old: 'Mật khẩu hiện tại',
+      ph_pwd_new: 'Mật khẩu mới (tối thiểu 6)',
+      ph_pwd_new2: 'Nhập lại mật khẩu mới',
+      btn_save_pwd: 'Lưu mật khẩu',
+      create_user_hint: 'Tạo người dùng (không tự đăng ký). Mật khẩu mặc định <b>a123456</b>.',
+      ph_new_user: 'Tên người dùng mới',
+      ph_display_name: 'Tên hiển thị (tuỳ chọn)',
+      label_role: 'Vai trò',
+      role_user: 'Người dùng (được quét)',
+      role_viewer: 'Chỉ xem',
+      role_admin: 'Quản trị',
+      role_user_short: 'Người dùng',
+      role_viewer_short: 'Chỉ xem',
+      role_admin_short: 'Admin',
+      btn_create_user: 'Tạo người dùng',
+      btn_close: 'Đóng',
+      btn_ok: 'Xác nhận',
+      btn_scrape: 'Cào lại',
+      btn_scrape_fill: 'Bổ sung metadata',
+      btn_lock: 'Khóa',
+      btn_unlock: 'Mở khóa',
+      btn_move: 'Chuyển thư viện',
+      btn_delete: 'Xóa',
+      label_locked: 'Đã khóa',
+      pick_lib: 'Chọn',
+      cur_lib: 'Hiện tại: ',
+      please_pick_lib: 'Hãy chọn thư viện',
+      no_books: 'Trống',
+      loading: '…',
+      pick_lib_first: 'Hãy chọn thư viện trước',
+    },
+  };
+
+  let lang = 'zh';
+  try {
+    const saved = localStorage.getItem(LS_LANG);
+    if (saved && I18N[saved]) lang = saved;
+  } catch (_) {}
+
+  function t(key) {
+    const pack = I18N[lang] || I18N.zh;
+    if (pack[key] != null) return pack[key];
+    if (I18N.zh[key] != null) return I18N.zh[key];
+    return key;
+  }
+
+  function applyLang(next, opts) {
+    if (next && I18N[next]) lang = next;
+    try {
+      localStorage.setItem(LS_LANG, lang);
+    } catch (_) {}
+    const meta = LANGS.find((x) => x.id === lang) || LANGS[0];
+    document.documentElement.setAttribute('lang', meta.htmlLang);
+    document.title = t('app_title');
+
+    document.querySelectorAll('[data-i18n]').forEach((el) => {
+      const k = el.getAttribute('data-i18n');
+      if (!k) return;
+      el.textContent = t(k);
+    });
+    document.querySelectorAll('[data-i18n-html]').forEach((el) => {
+      const k = el.getAttribute('data-i18n-html');
+      if (!k) return;
+      el.innerHTML = t(k);
+    });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach((el) => {
+      const k = el.getAttribute('data-i18n-placeholder');
+      if (!k) return;
+      el.setAttribute('placeholder', t(k));
+    });
+
+    renderLangBars();
+    if (!(opts && opts.silent)) {
+      try {
+        if (typeof fillSel === 'function') fillSel();
+        if (typeof search === 'function') {
+          const p1 = document.getElementById('p1');
+          if (p1 && !p1.classList.contains('hide')) search();
+        }
+        if (typeof renderThemePicker === 'function') renderThemePicker();
+        if (me && typeof showApp === 'function') {
+          const who = document.getElementById('who');
+          if (who) {
+            const roleLabel =
+              me.role === 'admin'
+                ? t('role_admin_short')
+                : me.role === 'viewer'
+                  ? t('role_viewer_short')
+                  : t('role_user_short');
+            who.textContent = (me.display_name || me.username) + ' · ' + roleLabel;
+          }
+        }
+      } catch (_) {}
+    }
+  }
+
+  function renderLangBars() {
+    ['login-lang', 'app-lang'].forEach((id) => {
+      const box = document.getElementById(id);
+      if (!box) return;
+      box.innerHTML = LANGS.map((L) => {
+        return (
+          '<button type="button" class="' +
+          (L.id === lang ? 'on' : '') +
+          '" data-lang="' +
+          L.id +
+          '">' +
+          L.label +
+          '</button>'
+        );
+      }).join('');
+      box.querySelectorAll('[data-lang]').forEach((btn) => {
+        btn.onclick = () => applyLang(btn.getAttribute('data-lang'));
+      });
+    });
+  }
 
   const LS_THEME = 'bookScanner_theme';
   const THEMES = [
@@ -2822,9 +3368,12 @@
   window.renameLib = renameLib;
   window.editGroupLibraries = editGroupLibraries;
   window.onLibVisChange = onLibVisChange;
+  window.applyLang = applyLang;
+  window.t = t;
 
-  /* theme boot */
+  /* theme + lang boot */
   try { applyTheme(currentThemeId()); } catch (_) {}
+  try { applyLang(lang, { silent: true }); } catch (_) {}
   boot();
 })();
 </script>
