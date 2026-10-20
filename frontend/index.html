@@ -278,27 +278,31 @@
     /* 登录页：语言在登录框下方，低调可读 */
     .login-wrap{width:100%;max-width:22rem;display:flex;flex-direction:column;align-items:stretch}
     .login-lang{
-      display:flex;justify-content:center;align-items:center;flex-wrap:wrap;gap:6px;
-      margin-top:14px;padding:0 2px;
+      display:flex;justify-content:center;align-items:center;flex-wrap:wrap;gap:8px;
+      margin-top:16px;padding:0 4px;
     }
     .login-lang button{
-      border:1px solid var(--line);
-      background:var(--surface);
+      border:0;
+      background:transparent;
       color:var(--muted);
-      border-radius:999px;
-      padding:6px 11px;
+      border-radius:6px;
+      padding:4px 6px;
       font-size:12px;
-      font-weight:600;
+      font-weight:500;
       cursor:pointer;
-      min-height:30px;
+      min-height:28px;
+      opacity:.78;
       -webkit-tap-highlight-color:transparent;
     }
     .login-lang button.on{
-      border-color:color-mix(in srgb, var(--primary) 40%, var(--line));
-      background:var(--primary-soft);
       color:var(--primary-text);
+      font-weight:700;
+      opacity:1;
+      text-decoration:underline;
+      text-underline-offset:3px;
+      text-decoration-color:color-mix(in srgb, var(--primary) 45%, transparent);
     }
-    .login-lang button:active{opacity:.85}
+    .login-lang button:active{opacity:1}
     .theme-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px}
     .theme-opt{border:1px solid var(--line);border-radius:12px;padding:10px;background:#fff;cursor:pointer;text-align:left}
     .theme-opt.on{border-color:var(--primary);box-shadow:0 0 0 2px var(--primary-soft)}
