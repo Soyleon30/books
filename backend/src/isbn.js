@@ -903,11 +903,607 @@ async function fetchBookMeta(isbn) {
   return meta;
 }
 
+function extractIsbnFromIds(ids) {
+  if (!Array.isArray(ids)) return null;
+  for (const it of ids) {
+    const t = String((it && (it.type || it)) || '').toLowerCase();
+    const v = normalizeIsbn(it && (it.identifier || it.value || it));
+    if (!v) continue;
+    if (t.includes('isbn_13') || t.includes('isbn13')) return v.length === 13 ? v : null;
+    if (t.includes('isbn_10') || t.includes('isbn10')) return v;
+    if (t.includes('isbn') && (v.length === 10 || v.length === 13)) return v;
+  }
+  for (const it of ids) {
+    const v = normalizeIsbn(it && (it.identifier || it.value || it));
+    if (v && (v.length === 10 || v.length === 13) && isValidIsbn(v)) return v;
+  }
+  return null;
+}
+
+function normTitleKey(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[《》【】\[\]（）()·・\s:：\-—_'"“”‘’]/g, '')
+    .replace(/的/g, '');
+}
+
+/** 查询词与候选书名相似度 0~100（偏严，避免短串/散字误匹配） */
+function titleSimilarity(query, title) {
+  const q = normTitleKey(query);
+  const t = normTitleKey(title);
+  if (!q || !t) return 0;
+  if (q === t) return 100;
+
+  const qLen = q.length;
+  const tLen = t.length;
+  const minLen = Math.min(qLen, tLen);
+  const maxLen = Math.max(qLen, tLen);
+  const lenRatio = minLen / maxLen;
+
+  // 一方包含另一方：要求长度接近，避免「三」命中「三体」类短串误伤
+  if (t.includes(q) || q.includes(t)) {
+    if (minLen < 2) return 0;
+    if (lenRatio < 0.45 && minLen < 4) return Math.round(25 + lenRatio * 30);
+    if (lenRatio < 0.55 && minLen < 6) return Math.round(45 + lenRatio * 30);
+    return Math.round(72 + lenRatio * 28);
+  }
+
+  // 连续 bigram / trigram（中文主路径）
+  let dig = 0;
+  let digHit = 0;
+  for (let i = 0; i < qLen - 1; i++) {
+    dig += 1;
+    if (t.includes(q.slice(i, i + 2))) digHit += 1;
+  }
+  const digRate = dig ? digHit / dig : 0;
+
+  let tri = 0;
+  let triHit = 0;
+  for (let i = 0; i < qLen - 2; i++) {
+    tri += 1;
+    if (t.includes(q.slice(i, i + 3))) triHit += 1;
+  }
+  const triRate = tri ? triHit / tri : 0;
+
+  // 最长公共子串
+  let lcs = 0;
+  const qChars = [...q];
+  const tChars = [...t];
+  const dp = new Array(tChars.length + 1).fill(0);
+  for (let i = 0; i < qChars.length; i++) {
+    let prev = 0;
+    for (let j = 0; j < tChars.length; j++) {
+      const tmp = dp[j + 1];
+      if (qChars[i] === tChars[j]) {
+        dp[j + 1] = prev + 1;
+        if (dp[j + 1] > lcs) lcs = dp[j + 1];
+      } else {
+        dp[j + 1] = 0;
+      }
+      prev = tmp;
+    }
+  }
+  const lcsRatio = lcs / maxLen;
+
+  // 字符集合覆盖（仅作弱信号，不再单独给中高分）
+  const qSet = [...new Set(qChars)];
+  let setHit = 0;
+  for (const c of qSet) {
+    if (t.includes(c)) setHit += 1;
+  }
+  const cover = qSet.length ? setHit / qSet.length : 0;
+
+  // 主分：连续匹配优先
+  if (tri >= 1 && triRate >= 0.6 && lcs >= 3) {
+    return Math.round(55 + triRate * 25 + lcsRatio * 15);
+  }
+  if (dig >= 2 && digRate >= 0.65 && lcs >= 2) {
+    return Math.round(42 + digRate * 30 + lcsRatio * 12);
+  }
+  if (lcs >= 4 && lcsRatio >= 0.45) {
+    return Math.round(38 + lcsRatio * 40);
+  }
+  if (dig >= 2 && digRate >= 0.5 && cover >= 0.7 && qLen >= 4) {
+    return Math.round(28 + digRate * 25 + cover * 15);
+  }
+  // 散字重合不够：压低，避免乱匹配进候选
+  if (cover >= 0.85 && qLen >= 4 && digRate >= 0.35) {
+    return Math.round(18 + cover * 15);
+  }
+  return Math.round(Math.min(cover, digRate) * 22);
+}
+
+function buildTitleQueryVariants(query) {
+  const q = String(query || '').trim().slice(0, 80);
+  if (!q) return [];
+  const set = new Set([q]);
+  // 去书名号
+  set.add(q.replace(/[《》]/g, ''));
+  // 去常见后缀词再搜一次
+  const stripped = q.replace(/(自传|回忆录|全集|选集|文集|小说|故事)$/g, '').trim();
+  if (stripped.length >= 2 && stripped !== q) set.add(stripped);
+  // 空格拆开取最长中文段
+  for (const part of q.split(/\s+/)) {
+    if (/[\u4e00-\u9fff]{2,}/.test(part)) set.add(part);
+  }
+  return [...set].filter((s) => s.length >= 2).slice(0, 4);
+}
+
+async function doubanSuggest(q) {
+  const url = `https://book.douban.com/j/subject_suggest?q=${encodeURIComponent(q)}`;
+  try {
+    const r = await fetchText(url, 6000, 'douban-suggest');
+    if (!r || !r.ok || !r.text) return [];
+    const data = JSON.parse(r.text);
+    if (!Array.isArray(data)) return [];
+    return data
+      .filter((x) => x && (x.type === 'b' || x.type === 'book' || x.url || x.id))
+      .map((x) => ({
+        title: pick(x.title),
+        authors: pick(x.author_name || x.author),
+        cover: cleanCover(x.pic || x.img),
+        published: pick(x.year),
+        douban_id: x.id != null ? String(x.id) : null,
+        url: x.url || (x.id ? `https://book.douban.com/subject/${x.id}/` : null),
+        source: 'douban-suggest',
+      }))
+      .filter((x) => x.title);
+  } catch (e) {
+    logScrape('title_search', {
+      source: 'douban-suggest',
+      q,
+      ok: false,
+      error: e.message || String(e),
+    });
+    return [];
+  }
+}
+
+/** 从豆瓣条目页尽量抠 ISBN（有则用于入库） */
+async function doubanSubjectIsbn(subjectIdOrUrl) {
+  let url = subjectIdOrUrl;
+  if (!url) return null;
+  if (!/^https?:/i.test(url)) {
+    url = `https://book.douban.com/subject/${url}/`;
+  }
+  try {
+    const r = await fetchText(url, 7000, 'douban-subject');
+    const html = r && r.text;
+    if (!html) return null;
+    const m =
+      html.match(/ISBN[:：\s]*([0-9Xx\-]{10,17})/i) ||
+      html.match(/itemprop="isbn"[^>]*content="([0-9Xx\-]+)"/i) ||
+      html.match(/"isbn13"\s*:\s*"([0-9Xx\-]+)"/i) ||
+      html.match(/"isbn10"\s*:\s*"([0-9Xx\-]+)"/i);
+    if (!m) return null;
+    const n = normalizeIsbn(m[1]);
+    return isValidIsbn(n) ? n : null;
+  } catch (e) {
+    logScrape('title_search', {
+      source: 'douban-subject',
+      ok: false,
+      error: e.message || String(e),
+    });
+    return null;
+  }
+}
+
+/** 按书名检索；diag 为 matchLog 可选回调 */
+async function searchByTitle(query, limit = 8, diag) {
+  const q0 = String(query || '').trim().slice(0, 120);
+  const dlog = diag && typeof diag.log === 'function' ? diag : null;
+  if (q0.length < 2) {
+    if (dlog) dlog.log('search_skip', { query_text: q0, reason: 'too_short', ok: false });
+    return [];
+  }
+  const variants = buildTitleQueryVariants(q0);
+  if (dlog) {
+    dlog.log('search_begin', {
+      query_text: q0,
+      ok: true,
+      request: { query: q0, variants, limit },
+      summary: `variants=${variants.join('|')}`,
+    });
+  }
+  const out = [];
+  const seen = new Set();
+  const siteStats = [];
+
+  const push = (item) => {
+    if (!item || !item.title) return;
+    const isbn = item.isbn ? normalizeIsbn(item.isbn) : null;
+    const key =
+      (isbn && isValidIsbn(isbn) ? isbn : '') ||
+      item.douban_id ||
+      `${item.title}|${item.authors || ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    let sim = titleSimilarity(q0, item.title);
+    // 作者名仅作微弱加分，禁止把「作者当书名」抬到可自动选
+    if (item.authors && sim >= 35) {
+      const as = titleSimilarity(q0, item.authors);
+      if (as >= 50) sim = Math.min(100, sim + 6);
+      else if (as >= 30) sim = Math.min(100, sim + 3);
+    }
+    // 有封面略加分（不改变排序主序）
+    if (item.cover && sim >= 40) sim = Math.min(100, sim + 1);
+    out.push({
+      title: item.title,
+      authors: item.authors || null,
+      cover: item.cover || null,
+      publisher: item.publisher || null,
+      published: item.published || null,
+      isbn: isbn && isValidIsbn(isbn) ? isbn : null,
+      douban_id: item.douban_id || null,
+      source: item.source || null,
+      match_score: sim,
+    });
+  };
+
+  async function googleSearch(q, mode) {
+    const qq = mode === 'intitle' ? `intitle:${q}` : q;
+    const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(qq)}&maxResults=${Math.min(limit + 2, 12)}`;
+    const t0 = Date.now();
+    try {
+      const data = await fetchJson(url, 5000, `google-search-${mode}`);
+      const items = (data && data.items) || [];
+      const before = out.length;
+      for (const item of items) {
+        const v = item.volumeInfo || {};
+        if (!v.title) continue;
+        const img =
+          (v.imageLinks &&
+            (v.imageLinks.thumbnail ||
+              v.imageLinks.smallThumbnail ||
+              v.imageLinks.medium ||
+              v.imageLinks.large)) ||
+          null;
+        push({
+          title: pick(v.title),
+          authors: pick((v.authors || []).join(', ')),
+          cover: cleanCover(img),
+          publisher: pick(v.publisher),
+          published: pick(v.publishedDate),
+          isbn: extractIsbnFromIds(v.industryIdentifiers),
+          source: mode === 'intitle' ? 'google-intitle' : 'google',
+        });
+      }
+      const added = out.length - before;
+      siteStats.push({ site: `google:${mode}`, q, ok: true, hits: items.length, added });
+      if (dlog) {
+        dlog.log('site_call', {
+          site: `google:${mode}`,
+          query_text: q,
+          ok: true,
+          elapsed_ms: Date.now() - t0,
+          request: { url, q, mode },
+          response: {
+            totalItems: data && data.totalItems,
+            sample: items.slice(0, 3).map((it) => {
+              const v = it.volumeInfo || {};
+              return { title: v.title, authors: v.authors, ids: v.industryIdentifiers };
+            }),
+          },
+          hits: out.slice(-added).map((x) => ({
+            title: x.title,
+            isbn: x.isbn,
+            score: x.match_score,
+            cover: !!x.cover,
+          })),
+          summary: `google ${mode} hits=${items.length} added=${added}`,
+        });
+      }
+      logScrape('title_search', { source: 'google', mode, q, ok: true, hits: items.length });
+    } catch (e) {
+      siteStats.push({ site: `google:${mode}`, q, ok: false, error: e.message || String(e) });
+      if (dlog) {
+        dlog.log('site_call', {
+          site: `google:${mode}`,
+          query_text: q,
+          ok: false,
+          elapsed_ms: Date.now() - t0,
+          request: { url, q, mode },
+          reason: e.message || String(e),
+          summary: `google ${mode} FAIL ${e.message || e}`,
+        });
+      }
+      logScrape('title_search', {
+        source: 'google',
+        mode,
+        q,
+        ok: false,
+        error: e.message || String(e),
+      });
+    }
+  }
+
+  async function openLibrarySearch(q) {
+    const t0 = Date.now();
+    const url = `https://openlibrary.org/search.json?q=${encodeURIComponent(q)}&limit=${Math.min(limit, 12)}`;
+    try {
+      const data = await fetchJson(url, 5000, 'ol-search');
+      const docs = (data && data.docs) || [];
+      const before = out.length;
+      for (const d of docs) {
+        const isbnList = d.isbn || [];
+        let isbn = null;
+        for (const x of isbnList) {
+          const n = normalizeIsbn(x);
+          if (isValidIsbn(n) && n.length === 13) {
+            isbn = n;
+            break;
+          }
+        }
+        if (!isbn) {
+          for (const x of isbnList) {
+            const n = normalizeIsbn(x);
+            if (isValidIsbn(n)) {
+              isbn = n;
+              break;
+            }
+          }
+        }
+        const coverId = d.cover_i;
+        push({
+          title: pick(d.title),
+          authors: pick((d.author_name || []).join(', ')),
+          cover: coverId
+            ? cleanCover(`https://covers.openlibrary.org/b/id/${coverId}-L.jpg`)
+            : isbn
+              ? cleanCover(`https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg`)
+              : null,
+          publisher: pick((d.publisher || [])[0]),
+          published: pick(d.first_publish_year && String(d.first_publish_year)),
+          isbn,
+          source: 'openlibrary',
+        });
+      }
+      const added = out.length - before;
+      siteStats.push({ site: 'openlibrary', q, ok: true, hits: docs.length, added });
+      if (dlog) {
+        dlog.log('site_call', {
+          site: 'openlibrary',
+          query_text: q,
+          ok: true,
+          elapsed_ms: Date.now() - t0,
+          request: { url, q },
+          response: {
+            numFound: data && data.numFound,
+            sample: docs.slice(0, 3).map((d) => ({
+              title: d.title,
+              author_name: d.author_name,
+              isbn: (d.isbn || []).slice(0, 2),
+            })),
+          },
+          hits: out.slice(-added).map((x) => ({
+            title: x.title,
+            isbn: x.isbn,
+            score: x.match_score,
+            cover: !!x.cover,
+          })),
+          summary: `ol hits=${docs.length} added=${added}`,
+        });
+      }
+      logScrape('title_search', { source: 'openlibrary', q, ok: true, hits: docs.length });
+    } catch (e) {
+      siteStats.push({ site: 'openlibrary', q, ok: false, error: e.message || String(e) });
+      if (dlog) {
+        dlog.log('site_call', {
+          site: 'openlibrary',
+          query_text: q,
+          ok: false,
+          elapsed_ms: Date.now() - t0,
+          reason: e.message || String(e),
+          summary: `ol FAIL ${e.message || e}`,
+        });
+      }
+      logScrape('title_search', {
+        source: 'openlibrary',
+        q,
+        ok: false,
+        error: e.message || String(e),
+      });
+    }
+  }
+
+  // 1) 豆瓣（中文主源）
+  for (const v of variants) {
+    const t0 = Date.now();
+    const rows = await doubanSuggest(v);
+    const before = out.length;
+    for (const row of rows) {
+      // 豆瓣小图换大图
+      if (row.cover) {
+        row.cover = cleanCover(
+          String(row.cover)
+            .replace(/\/s\//g, '/l/')
+            .replace(/\/spic\//g, '/lpic/')
+            .replace(/\/view\/subject\/s\//, '/view/subject/l/')
+        );
+      }
+      push(row);
+    }
+    const added = out.length - before;
+    siteStats.push({ site: 'douban-suggest', q: v, ok: true, hits: rows.length, added });
+    if (dlog) {
+      dlog.log('site_call', {
+        site: 'douban-suggest',
+        query_text: v,
+        ok: rows.length > 0,
+        elapsed_ms: Date.now() - t0,
+        request: {
+          url: `https://book.douban.com/j/subject_suggest?q=${encodeURIComponent(v)}`,
+          q: v,
+        },
+        response: {
+          raw_n: rows.length,
+          sample: rows.slice(0, 5).map((x) => ({
+            title: x.title,
+            authors: x.authors,
+            id: x.douban_id,
+            cover: x.cover,
+          })),
+        },
+        hits: out.slice(-added).map((x) => ({
+          title: x.title,
+          isbn: x.isbn,
+          score: x.match_score,
+          cover: !!x.cover,
+        })),
+        reason: rows.length ? null : 'empty_suggest',
+        summary: `douban suggest q=${v} hits=${rows.length} added=${added}`,
+      });
+    }
+    logScrape('title_search', {
+      source: 'douban-suggest',
+      q: v,
+      ok: true,
+      hits: rows.length,
+    });
+  }
+
+  // 2) 补 ISBN + 封面（高分优先，最多 5）
+  const needIsbn = out
+    .filter((x) => !x.isbn && (x.douban_id || x.source === 'douban-suggest'))
+    .sort((a, b) => (b.match_score || 0) - (a.match_score || 0))
+    .slice(0, 5);
+  for (const it of needIsbn) {
+    const t0 = Date.now();
+    const isbn = await doubanSubjectIsbn(it.douban_id || it.url);
+    if (isbn) {
+      it.isbn = isbn;
+      if (!it.cover) {
+        it.cover = cleanCover(`https://img3.doubanio.com/view/subject/l/public/s${it.douban_id}.jpg`);
+      }
+      if (dlog) {
+        dlog.log('site_call', {
+          site: 'douban-subject',
+          query_text: q0,
+          ok: true,
+          elapsed_ms: Date.now() - t0,
+          request: { douban_id: it.douban_id, title: it.title },
+          response: { isbn, title: it.title },
+          summary: `douban subject isbn=${isbn} title=${it.title}`,
+        });
+      }
+    } else if (dlog) {
+      dlog.log('site_call', {
+        site: 'douban-subject',
+        query_text: q0,
+        ok: false,
+        elapsed_ms: Date.now() - t0,
+        request: { douban_id: it.douban_id, title: it.title },
+        reason: 'isbn_not_found_on_page',
+        summary: `douban subject no isbn title=${it.title}`,
+      });
+    }
+  }
+
+  // 3) 有 ISBN 无封面：用 OL / 豆瓣图兜底
+  for (const it of out) {
+    if (it.isbn && !it.cover) {
+      it.cover =
+        cleanCover(`https://covers.openlibrary.org/b/isbn/${it.isbn}-L.jpg`) ||
+        it.cover;
+    }
+  }
+
+  // 4) Google / OL 补充
+  if (out.length < limit) {
+    for (const v of variants.slice(0, 2)) {
+      await googleSearch(v, 'intitle');
+      if (out.length >= limit * 2) break;
+    }
+  }
+  if (out.length < Math.ceil(limit / 2)) {
+    await openLibrarySearch(variants[0] || q0);
+  }
+
+  for (const it of out) {
+    if (it.match_score == null) it.match_score = titleSimilarity(q0, it.title);
+  }
+  out.sort((a, b) => {
+    const ds = (b.match_score || 0) - (a.match_score || 0);
+    if (ds) return ds;
+    const cover = (b.cover ? 1 : 0) - (a.cover ? 1 : 0);
+    if (cover) return cover;
+    return (b.isbn ? 1 : 0) - (a.isbn ? 1 : 0);
+  });
+
+  // 候选门槛提高：弱相关不进列表，避免「选择版本」一堆乱项
+  const filtered = out.filter((x) => (x.match_score || 0) >= 35);
+  let finalList = filtered.slice(0, limit);
+  // 全灭时放宽一次，仍要求最低相关
+  if (!finalList.length) {
+    finalList = out
+      .filter((x) => (x.match_score || 0) >= 28)
+      .slice(0, Math.min(5, limit));
+  }
+
+  if (dlog) {
+    dlog.log('search_end', {
+      query_text: q0,
+      ok: finalList.length > 0,
+      reason: finalList.length
+        ? null
+        : siteStats.every((s) => s.ok === false)
+          ? 'all_sites_failed'
+          : 'no_relevant_hits',
+      hits: finalList.map((x) => ({
+        title: x.title,
+        authors: x.authors,
+        isbn: x.isbn,
+        score: x.match_score,
+        source: x.source,
+        cover: !!x.cover,
+      })),
+      response: { site_stats: siteStats, raw_n: out.length, kept_n: finalList.length },
+      summary: finalList.length
+        ? `kept=${finalList.length} top=${finalList[0].title}#${finalList[0].match_score}`
+        : `no hit; sites=${JSON.stringify(siteStats).slice(0, 200)}`,
+    });
+  }
+
+  return finalList;
+}
+
+/** 为匹配结果落盘封面（有远程 URL + ISBN 时） */
+async function ensureMatchCover(item) {
+  if (!item) return item;
+  if (item.cover && String(item.cover).startsWith('/api/covers/')) return item;
+  const isbn = item.isbn ? normalizeIsbn(item.isbn) : null;
+  if (!isbn || !isValidIsbn(isbn)) return item;
+  // 已有本地
+  const local = localCoverPath(isbn);
+  if (local && item.cover && String(item.cover).includes(isbn)) {
+    item.cover = local;
+    return item;
+  }
+  const urls = [];
+  if (item.cover) urls.push(item.cover);
+  urls.push(`https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg`);
+  if (item.douban_id) {
+    urls.push(`https://img3.doubanio.com/view/subject/l/public/s${item.douban_id}.jpg`);
+  }
+  try {
+    const best = await pickBestCover(urls, isbn);
+    if (best && best.local) item.cover = best.local;
+    else if (best && best.url) item.cover = best.url;
+    else if (local) item.cover = local;
+  } catch (_) {
+    if (local) item.cover = local;
+  }
+  return item;
+}
+
 module.exports = {
   normalizeIsbn,
   isValidIsbn,
   fetchBookMeta,
   fetchBookMetaDetailed,
+  searchByTitle,
+  titleSimilarity,
+  ensureMatchCover,
   cleanCover,
   probeCover,
   pickBestCover,

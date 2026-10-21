@@ -1,10 +1,23 @@
-require('dotenv').config();
+const path = require('path');
+const fs = require('fs');
+// 优先加载项目根 .env，其次 backend/.env
+require('dotenv').config({ path: path.join(__dirname, '..', '..', '.env') });
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const express = require('express');
 const cors = require('cors');
 const { pool, initDb } = require('./db');
-const fs = require('fs');
-const path = require('path');
-const { normalizeIsbn, isValidIsbn, fetchBookMeta, fetchBookMetaDetailed } = require('./isbn');
+const {
+  normalizeIsbn,
+  isValidIsbn,
+  fetchBookMeta,
+  fetchBookMetaDetailed,
+  searchByTitle,
+  titleSimilarity,
+  ensureMatchCover,
+} = require('./isbn');
+const { recognizeBase64, paddleConfigured, aliyunConfigured } = require('./spine');
+const { newSpineTrace } = require('./spineLog');
+const { newMatchRun } = require('./matchLog');
 const {
   hashPassword,
   verifyPassword,
@@ -35,7 +48,7 @@ try {
 }
 
 app.use(cors());
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '4mb' }));
 
 // 封面：优先磁盘缓存，否则 MySQL book_covers（公开，auth 之前）
 app.get('/api/covers/:name', async (req, res) => {
@@ -1442,6 +1455,659 @@ app.delete('/api/scrape-logs', adminRequired, async (req, res) => {
 });
 
 // ---------- books (scoped by library) ----------
+
+async function markInLibrary(libraryId, remoteList) {
+  let remote = remoteList || [];
+  if (!remote.length) return remote;
+  const isbns = remote.map((r) => r.isbn).filter(Boolean);
+  if (!isbns.length) return remote.map((r) => ({ ...r, in_library: false }));
+  const [exist] = await pool.query(
+    `SELECT isbn FROM books WHERE library_id = ? AND isbn IN (${isbns.map(() => '?').join(',')})`,
+    [libraryId, ...isbns]
+  );
+  const have = new Set(exist.map((r) => r.isbn));
+  return remote.map((r) => ({
+    ...r,
+    in_library: r.isbn ? have.has(r.isbn) : false,
+  }));
+}
+
+async function searchOneSpineQuery(libraryId, query, remoteLimit, trace, matchRun) {
+  const q = String(query || '').trim().slice(0, 120);
+  const log = trace || { info() {}, warn() {}, error() {} };
+  const mlog = matchRun || null;
+  if (q.length < 2) {
+    log.warn('search_skip', { query: q, reason: 'too_short' });
+    if (mlog) mlog.warn('query_skip', { query_text: q, reason: 'too_short' });
+    return { query: q, local: [], remote: [], pick: null, miss_reason: 'too_short' };
+  }
+  if (mlog) mlog.info('query_begin', { query_text: q, summary: `search q=${q}` });
+
+  const tLocal = Date.now();
+  const like = `%${q.replace(/[%_]/g, '')}%`;
+  const [localRows] = await pool.query(
+    `SELECT ${BOOK_COLS} FROM books
+     WHERE library_id = ?
+       AND (title LIKE ? OR authors LIKE ? OR isbn LIKE ?)
+     ORDER BY
+       CASE WHEN title = ? THEN 0 WHEN title LIKE ? THEN 1 ELSE 2 END,
+       id DESC
+     LIMIT 8`,
+    [libraryId, like, like, like, q, `${q}%`]
+  );
+  const localRanked = (localRows || [])
+    .map((r) => ({ ...r, match_score: titleSimilarity(q, r.title) }))
+    .sort((a, b) => (b.match_score || 0) - (a.match_score || 0));
+  log.info('search_local', {
+    query: q,
+    hits: localRanked.length,
+    ms: Date.now() - tLocal,
+    titles: localRanked.slice(0, 3).map((r) => `${r.title}#${r.match_score}`),
+  });
+  if (mlog) {
+    mlog.info('local_search', {
+      query_text: q,
+      ok: true,
+      elapsed_ms: Date.now() - tLocal,
+      hits: localRanked.slice(0, 8).map((r) => ({
+        title: r.title,
+        isbn: r.isbn,
+        score: r.match_score,
+        cover: !!r.cover,
+      })),
+      summary: `local hits=${localRanked.length}`,
+    });
+  }
+
+  let remote = [];
+  const tRemote = Date.now();
+  try {
+    remote = await searchByTitle(q, remoteLimit || 8, mlog);
+    log.info('search_remote', {
+      query: q,
+      hits: remote.length,
+      ms: Date.now() - tRemote,
+      top: remote.slice(0, 4).map((r) => ({
+        title: r.title,
+        isbn: r.isbn,
+        score: r.match_score,
+        source: r.source,
+        cover: !!r.cover,
+      })),
+    });
+  } catch (e) {
+    log.error('search_remote_fail', {
+      query: q,
+      error: e.message || String(e),
+      ms: Date.now() - tRemote,
+    });
+    if (mlog) {
+      mlog.error('remote_fail', {
+        query_text: q,
+        reason: e.message || String(e),
+        elapsed_ms: Date.now() - tRemote,
+      });
+    }
+    console.error('[spine-search]', e.message || e);
+  }
+  remote = await markInLibrary(libraryId, remote);
+
+  let pick = null;
+  let miss_reason = null;
+  // 自动选门槛：书名相似度够才自动选；不再因 douban-suggest 或任意 remote[0] 乱配
+  const AUTO_REMOTE = 55;
+  const AUTO_LOCAL = 55;
+  const remoteGood = remote
+    .filter((r) => (r.match_score || 0) >= AUTO_REMOTE)
+    .sort((a, b) => {
+      const ds = (b.match_score || 0) - (a.match_score || 0);
+      if (ds) return ds;
+      if (!!b.cover !== !!a.cover) return b.cover ? 1 : -1;
+      if (a.in_library !== b.in_library) return a.in_library ? 1 : -1;
+      return (b.isbn ? 1 : 0) - (a.isbn ? 1 : 0);
+    });
+  const localGood = localRanked.filter((r) => (r.match_score || 0) >= AUTO_LOCAL);
+
+  if (remoteGood[0] && remoteGood[0].isbn && !remoteGood[0].in_library) {
+    pick = { ...remoteGood[0], source_kind: 'remote' };
+  } else if (localGood[0]) {
+    const r = localGood[0];
+    pick = {
+      title: r.title,
+      authors: r.authors,
+      cover: r.cover,
+      isbn: r.isbn,
+      publisher: r.publisher,
+      published: r.published,
+      in_library: true,
+      match_score: r.match_score,
+      source_kind: 'local',
+    };
+  } else if (remoteGood[0]) {
+    // 高分但无 ISBN / 已在馆：仍作为建议，用户可选手输或换版本
+    pick = { ...remoteGood[0], source_kind: 'remote' };
+  } else {
+    miss_reason = remote.length || localRanked.length
+      ? 'candidates_below_threshold'
+      : 'no_remote_or_local_hits';
+  }
+
+  // 补封面（有 ISBN 时落盘）
+  if (pick && pick.isbn && !pick.in_library) {
+    try {
+      pick = await ensureMatchCover(pick);
+    } catch (e) {
+      if (mlog) mlog.warn('cover_fail', { query_text: q, reason: e.message || String(e) });
+    }
+  }
+  // 候选也尽量带封面 URL
+  for (let i = 0; i < Math.min(remote.length, 5); i++) {
+    if (remote[i].isbn && !remote[i].cover) {
+      try {
+        remote[i] = await ensureMatchCover(remote[i]);
+      } catch (_) {}
+    }
+  }
+
+  if (!pick) {
+    if (mlog) {
+      mlog.warn('query_miss', {
+        query_text: q,
+        reason: miss_reason || 'no_pick',
+        hits: remote.slice(0, 5).map((r) => ({
+          title: r.title,
+          isbn: r.isbn,
+          score: r.match_score,
+          source: r.source,
+        })),
+        summary: `MISS q=${q} reason=${miss_reason || 'no_pick'} remote=${remote.length} local=${localRanked.length}`,
+      });
+    }
+  } else {
+    if (mlog) {
+      mlog.info('query_hit', {
+        query_text: q,
+        ok: true,
+        pick: {
+          title: pick.title,
+          isbn: pick.isbn,
+          authors: pick.authors,
+          score: pick.match_score,
+          source: pick.source_kind || pick.source,
+          cover: pick.cover || null,
+          in_library: !!pick.in_library,
+        },
+        summary: `HIT q=${q} => ${pick.title} isbn=${pick.isbn || '-'} score=${pick.match_score} cover=${pick.cover ? 1 : 0}`,
+      });
+    }
+  }
+
+  log.info('search_pick', {
+    query: q,
+    pick: pick
+      ? {
+          title: pick.title,
+          isbn: pick.isbn,
+          match_score: pick.match_score,
+          in_library: !!pick.in_library,
+          source: pick.source_kind || pick.source,
+          cover: !!pick.cover,
+        }
+      : null,
+    miss_reason,
+  });
+
+  return { query: q, local: localRanked, remote, pick, miss_reason };
+}
+
+/** 书脊：OCR 可识别多根书脊 → 逐条检索（需人选确认） */
+app.post('/api/books/spine-recognize', writeRequired, async (req, res) => {
+  const libraryId = parseLibraryId(req.body.library_id);
+  const image = req.body.image;
+  let query = String(req.body.query || '').trim().slice(0, 120);
+  const multi = req.body.multi !== false; // 默认多书脊
+  const trace = newSpineTrace({
+    user: req.user && req.user.username,
+    library_id: libraryId,
+  });
+  const matchRun = newMatchRun({
+    user_id: req.user && req.user.id,
+    username: req.user && req.user.username,
+    library_id: libraryId,
+  });
+
+  if (!libraryId) {
+    trace.error('reject', { reason: 'no_library' });
+    matchRun.error('reject', { reason: 'no_library' });
+    return res.status(400).json({
+      error: '请先选择图书馆',
+      trace: trace.summary(),
+      match_run_id: matchRun.runId,
+    });
+  }
+
+  try {
+    trace.info('start', {
+      user: req.user && req.user.username,
+      library_id: libraryId,
+      has_image: !!image,
+      image_kb: image ? Math.round(String(image).length / 1024) : 0,
+      query: query || null,
+      multi,
+    });
+
+    const access = await canAccessLibrary(req.user, libraryId);
+    if (!access.ok) {
+      trace.error('access_denied', { reason: access.reason });
+      return res.status(access.reason === 'not_found' ? 404 : 403).json({
+        error: access.reason === 'not_found' ? '图书馆不存在' : '无权访问该馆',
+        trace: trace.summary(),
+      });
+    }
+    trace.info('access_ok', { library_id: libraryId });
+
+    let ocr = null;
+    let queries = [];
+    if (image) {
+      const tOcr = Date.now();
+      trace.info('ocr_begin', {
+        engine_prefer: process.env.OCR_ENGINE || 'auto',
+        paddle_configured: paddleConfigured(),
+        aliyun_configured: aliyunConfigured(),
+        paddle_models: process.env.PADDLE_OCR_MODELS || 'PP-OCRv5,PP-OCRv6',
+        ocr_retry: process.env.OCR_RETRY != null ? process.env.OCR_RETRY : 1,
+      });
+      try {
+        ocr = await recognizeBase64(image);
+        trace.info('ocr_done', {
+          ms: Date.now() - tOcr,
+          engine: ocr && ocr.engine,
+          model: ocr && (ocr.model || ocr.api),
+          api: ocr && ocr.api,
+          confidence: ocr && ocr.confidence,
+          quality: ocr && ocr.quality,
+          word_count: ocr && ocr.word_count,
+          spine_count: ocr && ocr.spine_count,
+          best: ocr && ocr.best,
+          spines: ocr && ocr.spines,
+          error: ocr && ocr.error,
+          engines: ocr && ocr.engines,
+          content_preview: ocr && ocr.content_preview,
+          raw_preview: ocr && ocr.raw ? String(ocr.raw).replace(/\s+/g, ' ').slice(0, 200) : null,
+        });
+        if (multi && ocr && Array.isArray(ocr.spines) && ocr.spines.length) {
+          queries = ocr.spines.map((s) => String(s).trim()).filter((s) => s.length >= 2);
+        }
+        if (!queries.length && ocr && ocr.query) queries = [ocr.query];
+        // search_hints 仅在 spines 为空/过少时补 1 条，避免组合串与单脊并行造成乱匹配
+        if (
+          queries.length <= 1 &&
+          ocr &&
+          Array.isArray(ocr.search_hints) &&
+          ocr.search_hints.length
+        ) {
+          const h = String(ocr.search_hints[0] || '').trim();
+          if (h.length >= 2 && !queries.some((q) => q === h)) queries.unshift(h);
+        }
+        if (query) queries = [query, ...queries.filter((q) => q !== query)];
+        // 默认最多 8 条书脊，减少 OCR 噪声行刷屏
+        const maxQ = multi ? 8 : 1;
+        if (queries.length > maxQ) queries = queries.slice(0, maxQ);
+      } catch (e) {
+        trace.error('ocr_fail', { ms: Date.now() - tOcr, error: e.message || String(e) });
+        console.error('[spine-recognize] ocr fail', e.message || e);
+        return res.status(400).json({
+          error: e.message || 'OCR 失败',
+          trace: trace.summary(),
+        });
+      }
+    } else if (query) {
+      queries = query
+        .split(/[,，;\n\r|／/]+/)
+        .map((s) => s.trim())
+        .filter((s) => s.length >= 2);
+      trace.info('manual_queries', { raw: query, parsed: queries });
+    } else {
+      trace.error('reject', { reason: 'no_image_or_query' });
+      return res.status(400).json({
+        error: '请上传书脊图或输入书名',
+        trace: trace.summary(),
+      });
+    }
+
+    // 去重保序
+    {
+      const before = queries.length;
+      const seen = new Set();
+      queries = queries
+        .filter((q) => {
+          const k = q.toLowerCase().replace(/\s+/g, '');
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        })
+        .slice(0, multi ? 8 : 1);
+      trace.info('queries_ready', {
+        before,
+        after: queries.length,
+        queries,
+      });
+    }
+
+    if (!queries.length) {
+      trace.warn('no_queries', { ocr_best: ocr && ocr.best, ocr_error: ocr && ocr.error });
+      return res.json({
+        ocr,
+        query: '',
+        queries: [],
+        spines: [],
+        local: [],
+        remote: [],
+        message: '未能从书脊识别出书名，请手动输入后重试',
+        trace: trace.summary(),
+      });
+    }
+
+    matchRun.info('run_start', {
+      query_text: queries.join(' | ').slice(0, 200),
+      request: {
+        queries,
+        multi,
+        has_image: !!image,
+        ocr_engine: ocr && ocr.engine,
+        ocr_spines: ocr && ocr.spines,
+      },
+      summary: `spine-recognize n=${queries.length} ocr=${ocr && ocr.engine}`,
+    });
+
+    const spineResults = [];
+    for (let i = 0; i < queries.length; i++) {
+      const q = queries[i];
+      trace.info('spine_item_begin', { index: i + 1, total: queries.length, query: q });
+      try {
+        const one = await searchOneSpineQuery(
+          libraryId,
+          q,
+          Math.max(8, queries.length > 1 ? 6 : 10),
+          trace,
+          matchRun
+        );
+        spineResults.push({
+          index: i,
+          query: one.query,
+          pick: one.pick,
+          local: one.local,
+          remote: one.remote,
+          miss_reason: one.miss_reason || null,
+        });
+        trace.info('spine_item_done', {
+          index: i + 1,
+          query: q,
+          local: (one.local || []).length,
+          remote: (one.remote || []).length,
+          pick_title: one.pick && one.pick.title,
+          pick_isbn: one.pick && one.pick.isbn,
+          pick_cover: !!(one.pick && one.pick.cover),
+          miss_reason: one.miss_reason,
+        });
+      } catch (e) {
+        trace.error('spine_item_fail', { index: i + 1, query: q, error: e.message || String(e) });
+        matchRun.error('query_error', {
+          query_text: q,
+          reason: e.message || String(e),
+        });
+        console.error('[spine-search-one]', q, e.message || e);
+        spineResults.push({
+          index: i,
+          query: q,
+          pick: null,
+          local: [],
+          remote: [],
+          error: e.message || String(e),
+          miss_reason: 'exception',
+        });
+      }
+    }
+
+    // 兼容旧前端：合并 remote/local（首条 query）
+    const first = spineResults[0] || { local: [], remote: [], query: '' };
+    const allRemote = [];
+    const seenIsbn = new Set();
+    for (const s of spineResults) {
+      for (const r of s.remote || []) {
+        const k = r.isbn || `${r.title}|${r.authors}`;
+        if (seenIsbn.has(k)) continue;
+        seenIsbn.add(k);
+        allRemote.push({ ...r, spine_query: s.query, spine_index: s.index });
+      }
+    }
+
+    const matched = spineResults.filter((s) => s.pick && s.pick.isbn).length;
+    const matchedLoose = spineResults.filter((s) => s.pick).length;
+    const missed = spineResults.filter((s) => !s.pick).map((s) => ({
+      query: s.query,
+      reason: s.miss_reason || s.error || 'no_pick',
+    }));
+    const msg =
+      matched > 0
+        ? `识别 ${spineResults.length} 条，有 ISBN 可入库 ${matched} 本` +
+          (matchedLoose > matched ? `（另 ${matchedLoose - matched} 条无ISBN）` : '')
+        : spineResults.length
+          ? `识别 ${spineResults.length} 条，暂无可用 ISBN，请本条重搜/选手输`
+          : '未找到匹配';
+
+    trace.info('finish', {
+      spines: spineResults.length,
+      matched,
+      matched_loose: matchedLoose,
+      total_ms: Date.now() - trace.t0,
+      message: msg,
+    });
+    matchRun.info('run_end', {
+      ok: matched > 0,
+      summary: `matched_isbn=${matched}/${spineResults.length} loose=${matchedLoose}`,
+      hits: spineResults.map((s) => ({
+        query: s.query,
+        pick: s.pick
+          ? { title: s.pick.title, isbn: s.pick.isbn, cover: !!s.pick.cover, score: s.pick.match_score }
+          : null,
+        miss_reason: s.miss_reason,
+      })),
+      reason: missed.length ? JSON.stringify(missed).slice(0, 500) : null,
+    });
+
+    await writeAudit(req, {
+      action: 'spine_recognize',
+      target_type: 'library',
+      target_id: libraryId,
+      detail: {
+        run_id: trace.runId,
+        match_run_id: matchRun.runId,
+        queries,
+        spine_count: spineResults.length,
+        matched,
+        matched_loose: matchedLoose,
+        ocr_best: ocr && ocr.best,
+        engine: ocr && ocr.engine,
+      },
+    });
+
+    res.json({
+      ocr,
+      query: first.query || queries[0],
+      queries,
+      spines: spineResults,
+      local: first.local || [],
+      remote: allRemote.length ? allRemote : first.remote || [],
+      message: msg,
+      trace: trace.summary(),
+      match_run_id: matchRun.runId,
+      match_summary: {
+        total: spineResults.length,
+        matched_isbn: matched,
+        matched_any: matchedLoose,
+        missed,
+      },
+    });
+  } catch (e) {
+    trace.error('fatal', { error: e.message || String(e) });
+    try {
+      matchRun.error('fatal', { reason: e.message || String(e) });
+    } catch (_) {}
+    console.error('[spine-recognize]', e.message || e);
+    res.status(500).json({
+      error: e.message || String(e),
+      trace: trace.summary(),
+      match_run_id: matchRun.runId,
+    });
+  }
+});
+
+/** 仅按书名检索（无 OCR，可改词重搜；与书脊单条重搜共用逻辑） */
+app.post('/api/books/title-search', writeRequired, async (req, res) => {
+  const libraryId = parseLibraryId(req.body.library_id);
+  const query = String(req.body.query || '').trim().slice(0, 120);
+  if (!libraryId) return res.status(400).json({ error: '请先选择图书馆' });
+  if (query.length < 2) return res.status(400).json({ error: '请输入至少2个字' });
+
+  const matchRun = newMatchRun({
+    user_id: req.user && req.user.id,
+    username: req.user && req.user.username,
+    library_id: libraryId,
+  });
+
+  try {
+    const access = await canAccessLibrary(req.user, libraryId);
+    if (!access.ok) {
+      return res.status(access.reason === 'not_found' ? 404 : 403).json({
+        error: access.reason === 'not_found' ? '图书馆不存在' : '无权访问该馆',
+      });
+    }
+
+    matchRun.info('run_start', {
+      query_text: query,
+      summary: 'title-search',
+    });
+    const one = await searchOneSpineQuery(libraryId, query, 10, null, matchRun);
+    matchRun.info('run_end', {
+      ok: !!(one.pick && one.pick.isbn),
+      pick: one.pick
+        ? {
+            title: one.pick.title,
+            isbn: one.pick.isbn,
+            cover: !!one.pick.cover,
+            score: one.pick.match_score,
+          }
+        : null,
+      reason: one.miss_reason,
+      summary: one.pick
+        ? `HIT ${one.pick.title}`
+        : `MISS ${one.miss_reason || 'no_pick'}`,
+    });
+    res.json({
+      query: one.query,
+      local: one.local || [],
+      remote: one.remote || [],
+      pick: one.pick || null,
+      miss_reason: one.miss_reason || null,
+      match_run_id: matchRun.runId,
+    });
+  } catch (e) {
+    matchRun.error('fatal', { reason: e.message || String(e) });
+    res.status(500).json({ error: e.message || String(e), match_run_id: matchRun.runId });
+  }
+});
+
+// ---------- match logs（书脊/书名匹配诊断）----------
+app.get('/api/match-logs/runs', adminRequired, async (req, res) => {
+  try {
+    const limit = Math.min(50, Math.max(5, Number(req.query.limit) || 20));
+    const q = String(req.query.q || '').trim();
+    const params = [];
+    let wh = '';
+    if (q) {
+      wh = 'WHERE query_text LIKE ? OR run_id LIKE ? OR username LIKE ? OR summary LIKE ?';
+      const like = '%' + q + '%';
+      params.push(like, like, like, like);
+    }
+    const [rows] = await pool.query(
+      `SELECT run_id,
+              MAX(created_at) AS last_at,
+              MIN(created_at) AS first_at,
+              COUNT(*) AS events,
+              MAX(username) AS username,
+              MAX(library_id) AS library_id,
+              SUBSTRING_INDEX(GROUP_CONCAT(query_text ORDER BY id DESC SEPARATOR '||'), '||', 1) AS sample_query,
+              SUM(CASE WHEN event IN ('query_hit','run_end') AND ok=1 THEN 1 ELSE 0 END) AS hit_events,
+              SUM(CASE WHEN event IN ('query_miss','query_skip') THEN 1 ELSE 0 END) AS miss_events,
+              SUBSTRING_INDEX(GROUP_CONCAT(CASE WHEN event='run_end' THEN summary END ORDER BY id DESC SEPARATOR '||'), '||', 1) AS end_summary
+       FROM match_logs
+       ${wh}
+       GROUP BY run_id
+       ORDER BY last_at DESC
+       LIMIT ?`,
+      [...params, limit]
+    );
+    res.json({ runs: rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message || String(e) });
+  }
+});
+
+app.get('/api/match-logs', adminRequired, async (req, res) => {
+  try {
+    const runId = String(req.query.run_id || '').trim();
+    const q = String(req.query.q || '').trim();
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(200, Math.max(20, Number(req.query.page_size) || 80));
+    const offset = (page - 1) * pageSize;
+    const where = [];
+    const params = [];
+    if (runId) {
+      where.push('run_id = ?');
+      params.push(runId);
+    }
+    if (q) {
+      where.push('(query_text LIKE ? OR summary LIKE ? OR reason LIKE ? OR site LIKE ?)');
+      const like = '%' + q + '%';
+      params.push(like, like, like, like);
+    }
+    const wh = where.length ? 'WHERE ' + where.join(' AND ') : '';
+    const [cnt] = await pool.query(`SELECT COUNT(*) AS c FROM match_logs ${wh}`, params);
+    const [rows] = await pool.query(
+      `SELECT id, run_id, user_id, username, library_id, query_text, event, site, ok,
+              http_status, request_json, response_json, hits_json, pick_json, reason,
+              elapsed_ms, summary, created_at
+       FROM match_logs ${wh}
+       ORDER BY id ${runId ? 'ASC' : 'DESC'}
+       LIMIT ? OFFSET ?`,
+      [...params, pageSize, offset]
+    );
+    res.json({
+      logs: rows,
+      page,
+      page_size: pageSize,
+      total: Number(cnt[0].c),
+      run_id: runId || null,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message || String(e) });
+  }
+});
+
+app.delete('/api/match-logs', adminRequired, async (req, res) => {
+  try {
+    const days = Math.max(1, Number(req.body.days) || 7);
+    const [r] = await pool.query(
+      `DELETE FROM match_logs WHERE created_at < (NOW() - INTERVAL ? DAY)`,
+      [days]
+    );
+    res.json({ deleted: r.affectedRows, days });
+  } catch (e) {
+    res.status(500).json({ error: e.message || String(e) });
+  }
+});
+
 app.get('/api/books/check/:isbn', async (req, res) => {
   const isbn = normalizeIsbn(req.params.isbn);
   const libraryId = parseLibraryId(req.query.library_id);

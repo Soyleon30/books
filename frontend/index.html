@@ -236,6 +236,7 @@
     .btn-main{background:var(--primary);color:var(--on-primary)}
     .btn-file{background:var(--accent);color:var(--on-primary);text-align:center;margin:0}
     .btn-batch{background:var(--accent-2);color:var(--on-primary);text-align:center;margin:0}
+    .btn-spine{background:#5b7c99;color:#fff;text-align:center;margin:0}
     .row{display:flex;gap:10px;margin-top:12px}
     .row .btn{flex:1;background:var(--surface);border:1px solid var(--line);color:var(--text);font-size:14px;font-weight:500;padding:12px}
     .file-main{display:block;width:100%;margin-bottom:12px;cursor:pointer}
@@ -244,12 +245,21 @@
     .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--primary);color:var(--on-primary);padding:12px 18px;border-radius:20px;font-size:14px;z-index:99;max-width:90%;font-weight:600;box-shadow:var(--shadow)}
     .toast.bad{background:var(--err-text)}
     .modal{position:fixed;inset:0;background:rgba(44,42,38,.45);display:flex;align-items:center;justify-content:center;z-index:80;padding:16px}
-    .mbox{background:var(--surface);border-radius:16px;width:100%;max-width:22rem;overflow:hidden;box-shadow:var(--shadow)}
+    .mbox{background:var(--surface);border-radius:16px;width:100%;max-width:min(26rem,96vw);overflow:hidden;box-shadow:var(--shadow)}
     .mbody{padding:18px}.mfoot{border-top:1px solid var(--line);padding:12px;display:flex;gap:8px}
     .mfoot button{flex:1;border:0;background:transparent;padding:12px;border-radius:12px;font-weight:600;color:var(--text)}
     .mfoot .go{background:var(--primary);color:var(--on-primary)}
     .card{background:var(--card);border-radius:12px;padding:12px;margin-bottom:10px;display:flex;gap:12px;border:1px solid var(--line)}
     .card img{width:56px;height:72px;object-fit:cover;border-radius:8px;background:var(--line)}
+    .spine-row{display:block;background:var(--card);border-radius:12px;padding:10px;margin-bottom:10px;border:1px solid var(--line)}
+    .spine-row.miss{border-color:#e8c98a;background:var(--warn-bg)}
+    .spine-row .spine-top{display:flex;gap:10px;align-items:flex-start}
+    .spine-row .spine-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+    .spine-row .spine-actions button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;cursor:pointer;color:var(--text)}
+    .spine-row .spine-actions button.pri{background:var(--primary);color:var(--on-primary);border-color:transparent}
+    .spine-row .cand{border:1px solid var(--line);border-radius:10px;padding:8px;margin-top:6px;background:#fff;cursor:pointer;display:flex;gap:8px;align-items:center}
+    .spine-row .cand.on{border-color:var(--primary);box-shadow:0 0 0 2px var(--primary-soft)}
+    .spine-row .cand img{width:36px;height:48px;object-fit:cover;border-radius:6px;background:var(--line)}
     input[type=text],input[type=password],input[type=search],input[type=email],input[type=number],.pane select,.field{
       width:100%;border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:14px;margin-bottom:8px;
       background:#fff;color:var(--text);outline:0;-webkit-appearance:none;appearance:none
@@ -342,6 +352,7 @@
           <button type="button" id="t4" class="hide" onclick="showTab(4)" data-i18n="tab_groups">群组</button>
           <button type="button" id="t5" class="hide" onclick="showTab(5)" data-i18n="tab_audit">审计</button>
           <button type="button" id="t6" class="hide" onclick="showTab(6)" data-i18n="tab_scrape_log">刮削</button>
+          <button type="button" id="t7" class="hide" onclick="showTab(7)" data-i18n="tab_match_log">匹配</button>
         </div>
         <div class="tabs-scan">
           <button type="button" class="on" id="t0" onclick="showTab(0)" data-i18n="tab_scan">扫描</button>
@@ -372,6 +383,11 @@
       <span class="btn btn-batch" data-i18n="btn_batch">批量选图入库（可多选）</span>
       <input id="file-batch" type="file" accept="image/*" multiple onchange="fromFilesBatch(event)">
     </label>
+    <label class="file-main" style="margin-top:8px">
+      <span class="btn btn-spine" data-i18n="btn_spine">拍书脊识书（可多本）</span>
+      <input id="file-spine" type="file" accept="image/*" capture="environment" onchange="fromSpineFile(event)">
+    </label>
+    <p class="hint" style="margin-top:0" data-i18n-html="spine_hint">书脊需<strong>竖书清晰</strong>；OCR 后按书名检索，请人选确认。无条码时用。</p>
     <!-- 实时摄像头扫描：体验不如拍照，暂时关闭
     <div id="preview">
       <video id="video" playsinline muted autoplay></video>
@@ -384,6 +400,7 @@
     -->
     <div class="row" style="margin-top:12px">
       <button type="button" class="btn" onclick="manual()" data-i18n="btn_manual">手动输入 ISBN</button>
+      <button type="button" class="btn" onclick="manualSpineTitle()" data-i18n="btn_spine_text">书名搜书</button>
     </div>
     <div id="log"></div>
     <!-- 保留隐藏 video 节点，避免旧脚本空引用；实时扫描关闭后不用 -->
@@ -472,6 +489,22 @@
     <div id="scrape-run-list" style="margin-bottom:10px"></div>
     <pre id="scrape-log-box" style="max-height:420px;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;font-size:11px;white-space:pre-wrap;word-break:break-all;margin:0" data-i18n="scrape_log_empty">打开本页自动加载最近批次…</pre>
   </div>
+
+  <div id="p7" class="pane hide">
+    <p style="font-size:14px;font-weight:600;margin:0 0 6px" data-i18n="match_log_title">书名匹配诊断</p>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 10px" data-i18n="match_log_hint">看每次书脊/书名检索：调了哪家接口、返回了什么、为何未命中。点批次展开明细。</p>
+    <div class="srow">
+      <input id="match-log-q" type="text" placeholder="书名 / run_id / 用户" style="flex:1" onkeydown="if(event.key==='Enter')loadMatchRuns()">
+      <button type="button" onclick="loadMatchRuns()" data-i18n="btn_refresh_runs">刷新批次</button>
+    </div>
+    <div style="display:flex;gap:8px;margin:8px 0;flex-wrap:wrap">
+      <button type="button" class="btn" style="width:auto;padding:6px 12px;font-size:12px" onclick="matchLogRunId='';loadMatchRuns()">全部批次</button>
+      <button type="button" class="btn" style="width:auto;padding:6px 12px;font-size:12px" onclick="clearMatchLogs()">清7天前</button>
+    </div>
+    <div id="match-log-meta" class="muted" style="font-size:12px;margin-bottom:6px"></div>
+    <div id="match-run-list" style="margin-bottom:10px"></div>
+    <pre id="match-log-box" style="max-height:480px;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;font-size:11px;white-space:pre-wrap;word-break:break-all;margin:0">打开本页自动加载最近匹配批次…</pre>
+  </div>
 <div id="p3" class="pane hide">
     
     <div style="margin-bottom:18px;padding-bottom:16px;border-bottom:1px solid var(--line)">
@@ -545,6 +578,9 @@
       tab_groups: '群组',
       tab_audit: '审计',
       tab_scrape_log: '刮削',
+      tab_match_log: '匹配',
+      match_log_title: '书名匹配诊断',
+      match_log_hint: '看每次书脊/书名检索：调了哪家接口、返回了什么、为何未命中。点批次展开明细。',
       tab_scan: '扫描',
       label_lib: '馆',
       ph_select: '请选择',
@@ -552,7 +588,10 @@
       scan_hint: '对准 ISBN 条码 <b>拍照</b> 或从相册选图，识别更稳。',
       btn_photo: '拍照 / 选图识别 ISBN',
       btn_batch: '批量选图入库（可多选）',
+      btn_spine: '拍书脊识书（可多本）',
+      spine_hint: '一图可含<strong>多根书脊</strong>；OCR 拆分后逐本检索，勾选确认入库。',
       btn_manual: '手动输入 ISBN',
+      btn_spine_text: '书名搜书',
       ph_search: '搜索',
       btn_search: '搜索',
       btn_scrape_missing: '批量刮削未知书名',
@@ -633,6 +672,9 @@
       tab_groups: '群組',
       tab_audit: '稽核',
       tab_scrape_log: '刮削',
+      tab_match_log: '匹配',
+      match_log_title: '書名匹配診斷',
+      match_log_hint: '查看每次書脊/書名檢索：呼叫了哪些介面、回傳內容、為何未命中。',
       tab_scan: '掃描',
       label_lib: '館',
       ph_select: '請選擇',
@@ -640,7 +682,10 @@
       scan_hint: '對準 ISBN 條碼 <b>拍照</b> 或從相簿選圖，識別更穩。',
       btn_photo: '拍照 / 選圖識別 ISBN',
       btn_batch: '批次選圖入庫（可多選）',
+      btn_spine: '拍書脊識書（單張）',
+      spine_hint: '書脊需<strong>豎書清晰</strong>；OCR 後按書名檢索，請人選確認。無條碼時用。',
       btn_manual: '手動輸入 ISBN',
+      btn_spine_text: '書名搜書',
       ph_search: '搜尋',
       btn_search: '搜尋',
       btn_scrape_missing: '批次刮削未知書名',
@@ -721,6 +766,9 @@
       tab_groups: 'Groups',
       tab_audit: 'Audit',
       tab_scrape_log: 'Scrape',
+      tab_match_log: 'Match',
+      match_log_title: 'Title match diagnostics',
+      match_log_hint: 'Per run: which APIs were called, what returned, why no hit.',
       tab_scan: 'Scan',
       label_lib: 'Library',
       ph_select: 'Select',
@@ -728,7 +776,10 @@
       scan_hint: 'Point at the ISBN barcode and <b>take a photo</b> or pick from gallery.',
       btn_photo: 'Photo / pick image for ISBN',
       btn_batch: 'Batch import images',
+      btn_spine: 'Spine photo (single)',
+      spine_hint: 'Clear vertical spine photo; OCR then title search — confirm manually. Use when no barcode.',
       btn_manual: 'Enter ISBN manually',
+      btn_spine_text: 'Search by title',
       ph_search: 'Search',
       btn_search: 'Search',
       btn_scrape_missing: 'Scrape missing titles',
@@ -809,6 +860,9 @@
       tab_groups: 'Группы',
       tab_audit: 'Аудит',
       tab_scrape_log: 'Скрап',
+      tab_match_log: 'Матч',
+      match_log_title: 'Диагностика матчинга',
+      match_log_hint: 'Какие API вызывались, что вернули, почему нет совпадения.',
       tab_scan: 'Скан',
       label_lib: 'Библиотека',
       ph_select: 'Выберите',
@@ -816,7 +870,10 @@
       scan_hint: 'Наведите на ISBN и <b>сделайте фото</b> или выберите из галереи.',
       btn_photo: 'Фото / выбрать ISBN',
       btn_batch: 'Пакетный импорт',
+      btn_spine: 'Фото корешка',
+      spine_hint: 'Чёткое фото корешка; OCR + поиск по названию, подтвердите вручную.',
       btn_manual: 'Ввести ISBN',
+      btn_spine_text: 'Поиск по названию',
       ph_search: 'Поиск',
       btn_search: 'Поиск',
       btn_scrape_missing: 'Дополнить без названия',
@@ -897,6 +954,9 @@
       tab_groups: 'Nhóm',
       tab_audit: 'Nhật ký',
       tab_scrape_log: 'Cào dữ liệu',
+      tab_match_log: 'Khớp',
+      match_log_title: 'Chẩn đoán khớp tên',
+      match_log_hint: 'API nào được gọi, trả về gì, vì sao không khớp.',
       tab_scan: 'Quét',
       label_lib: 'Thư viện',
       ph_select: 'Chọn',
@@ -904,7 +964,10 @@
       scan_hint: 'Hướng vào mã vạch ISBN rồi <b>chụp ảnh</b> hoặc chọn từ thư viện ảnh.',
       btn_photo: 'Chụp / chọn ảnh ISBN',
       btn_batch: 'Nhập hàng loạt ảnh',
+      btn_spine: 'Chụp gáy sách',
+      spine_hint: 'Chụp gáy rõ; OCR rồi tìm theo tên — cần xác nhận. Dùng khi không có mã vạch.',
       btn_manual: 'Nhập ISBN thủ công',
+      btn_spine_text: 'Tìm theo tên',
       ph_search: 'Tìm kiếm',
       btn_search: 'Tìm',
       btn_scrape_missing: 'Bổ sung sách thiếu tên',
@@ -1155,9 +1218,23 @@
   function L(m) {
     const t = new Date().toLocaleTimeString();
     lines.unshift(t + ' ' + m);
-    if (lines.length > 50) lines.pop();
-    logEl.textContent = lines.join('\n');
+    if (lines.length > 120) lines.pop();
+    if (logEl) logEl.textContent = lines.join('\n');
     console.log('[books]', m);
+  }
+  function Ltrace(trace) {
+    if (!trace || !Array.isArray(trace.steps)) return;
+    L('—— spine run #' + (trace.run_id || '?') + ' ' + (trace.elapsed_ms || 0) + 'ms ——');
+    trace.steps.forEach((s) => {
+      L(
+        '+' +
+          (s.elapsed_ms || 0) +
+          'ms [' +
+          (s.level || 'info') +
+          '] ' +
+          (s.message || s.step || '')
+      );
+    });
   }
   function st(m, k) {
     const el = document.getElementById('st');
@@ -1275,6 +1352,7 @@
     const t4 = document.getElementById('t4');
     const t5 = document.getElementById('t5');
     const t6 = document.getElementById('t6');
+    const t7 = document.getElementById('t7');
     const adminUsers = document.getElementById('admin-users');
     const scrapeBtn = document.querySelector('#p1 .btn[onclick="scrapeMissing()"]');
     const adminBulk = document.getElementById('admin-book-bulk');
@@ -1293,6 +1371,7 @@
       if (t4) t4.classList.add('hide');
       if (t5) t5.classList.add('hide');
       if (t6) t6.classList.add('hide');
+      if (t7) t7.classList.add('hide');
       if (scrapeBtn) scrapeBtn.classList.add('hide');
       showTab(1);
     } else {
@@ -1303,10 +1382,12 @@
         if (t4) t4.classList.remove('hide');
         if (t5) t5.classList.remove('hide');
         if (t6) t6.classList.remove('hide');
+        if (t7) t7.classList.remove('hide');
         if (libVis) libVis.classList.remove('hide');
       } else {
         if (t5) t5.classList.add('hide');
         if (t6) t6.classList.add('hide');
+        if (t7) t7.classList.add('hide');
         if (t4) t4.classList.remove('hide');
         if (libVis) libVis.classList.add('hide');
       }
@@ -2748,6 +2829,664 @@
     }
   }
 
+  function fileToJpegDataUrl(file, maxSide, quality) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const side = maxSide || 1280;
+          let w = img.width;
+          let h = img.height;
+          const scale = Math.min(1, side / Math.max(w, h, 1));
+          w = Math.max(1, Math.floor(w * scale));
+          h = Math.max(1, Math.floor(h * scale));
+          const c = document.createElement('canvas');
+          c.width = w;
+          c.height = h;
+          const cx = c.getContext('2d');
+          cx.fillStyle = '#fff';
+          cx.fillRect(0, 0, w, h);
+          cx.drawImage(img, 0, 0, w, h);
+          resolve(c.toDataURL('image/jpeg', quality == null ? 0.88 : quality));
+        } catch (e) {
+          reject(e);
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('图片读取失败'));
+      };
+      img.src = url;
+    });
+  }
+
+  function spineCandidateHtml(list, kind) {
+    if (!list || !list.length) {
+      return '<p class="muted" style="padding:8px 0;margin:0">无</p>';
+    }
+    return list
+      .map((b, i) => {
+        const title = esc(b.title || '未知');
+        const authors = esc(b.authors || '');
+        const isbn0 = b.isbn ? esc(b.isbn) : '';
+        const badge = b.in_library
+          ? '<span style="color:var(--warn-text);font-size:11px">馆内已有</span>'
+          : kind === 'local'
+            ? '<span style="color:var(--ok-text);font-size:11px">本馆</span>'
+            : b.isbn
+              ? '<span style="color:var(--primary);font-size:11px">可入库</span>'
+              : '<span style="color:var(--muted);font-size:11px">无ISBN</span>';
+        const click =
+          kind === 'local'
+            ? ''
+            : b.in_library
+              ? 'opacity:.65'
+              : b.isbn
+                ? 'cursor:pointer'
+                : 'opacity:.7';
+        const onclk =
+          kind === 'remote' && b.isbn && !b.in_library
+            ? ' onclick="pickSpineRemote(' + i + ')"'
+            : kind === 'local'
+              ? ' onclick="toast(\'已在本馆\',true)"'
+              : kind === 'remote' && !b.isbn
+                ? ' onclick="toast(\'无ISBN，请用条码或手动输入\',true)"'
+                : '';
+        return (
+          '<div class="card" style="margin-bottom:8px;align-items:center;' +
+          click +
+          '"' +
+          onclk +
+          '>' +
+          coverImg(b.cover, 48, 64) +
+          '<div style="flex:1;min-width:0">' +
+          '<div style="font-weight:700;font-size:14px">' +
+          title +
+          '</div>' +
+          '<div style="font-size:12px;color:var(--muted)">' +
+          authors +
+          '</div>' +
+          (isbn0
+            ? '<div style="font-size:11px;color:var(--muted)">ISBN ' + isbn0 + '</div>'
+            : '') +
+          badge +
+          '</div></div>'
+        );
+      })
+      .join('');
+  }
+
+  let spineRemote = [];
+  let spineRows = [];
+  let spineLastMeta = null;
+
+  function spineBadge(p) {
+    if (!p) return '<span style="color:var(--warn-text);font-size:11px">未匹配</span>';
+    if (p.in_library) return '<span style="color:var(--warn-text);font-size:11px">馆内已有</span>';
+    if (p.isbn) return '<span style="color:var(--ok-text);font-size:11px">可入库</span>';
+    return '<span style="color:var(--muted);font-size:11px">无ISBN</span>';
+  }
+
+  function spineMergeCands(s) {
+    const list = [];
+    const seen = new Set();
+    const add = (b, kind) => {
+      if (!b) return;
+      const key = (b.isbn || '') + '|' + (b.title || '') + '|' + (b.authors || '');
+      if (seen.has(key)) return;
+      seen.add(key);
+      list.push({ ...b, _kind: kind });
+    };
+    if (s.pick) add(s.pick, s.pick.source_kind || 'pick');
+    (s.remote || []).forEach((b) => add(b, 'remote'));
+    (s.local || []).forEach((b) =>
+      add(
+        {
+          title: b.title,
+          authors: b.authors,
+          cover: b.cover,
+          isbn: b.isbn,
+          publisher: b.publisher,
+          published: b.published,
+          in_library: true,
+          match_score: b.match_score,
+        },
+        'local'
+      )
+    );
+    // 按匹配分排序；同分优先有 ISBN、非馆内
+    list.sort((a, b) => {
+      const ds = (b.match_score || 0) - (a.match_score || 0);
+      if (ds) return ds;
+      if (!!b.isbn !== !!a.isbn) return b.isbn ? 1 : -1;
+      if (!!a.in_library !== !!b.in_library) return a.in_library ? 1 : -1;
+      return 0;
+    });
+    return list;
+  }
+
+  function renderSpineRow(s, i) {
+    if (!s.candidates) s.candidates = spineMergeCands(s);
+    if (s.pickIndex == null) {
+      const pi = s.candidates.findIndex(
+        (c) =>
+          s.pick &&
+          ((s.pick.isbn && c.isbn === s.pick.isbn) ||
+            (c.title === s.pick.title && c.authors === s.pick.authors))
+      );
+      s.pickIndex = pi >= 0 ? pi : s.candidates.length ? 0 : -1;
+      if (s.pickIndex >= 0 && !s.pick) s.pick = s.candidates[s.pickIndex];
+    }
+    const p = s.pickIndex >= 0 ? s.candidates[s.pickIndex] : null;
+    if (p) s.pick = p;
+    const canAdd = !!(p && p.isbn && !p.in_library);
+    const miss = !p;
+    const qVal = esc(s.query || '');
+    const score =
+      p && p.match_score != null
+        ? '<span style="font-size:11px;color:var(--muted)">匹配 ' + Math.round(p.match_score) + '</span>'
+        : '';
+    const open = s.openCands ? true : false;
+
+    let candsHtml = '';
+    if (open && s.candidates.length) {
+      candsHtml =
+        '<div style="margin-top:8px">' +
+        s.candidates
+          .map((c, ci) => {
+            const on = ci === s.pickIndex ? ' on' : '';
+            return (
+              '<div class="cand' +
+              on +
+              '" onclick="spineChooseCand(' +
+              i +
+              ',' +
+              ci +
+              ')">' +
+              coverImg(c.cover, 36, 48) +
+              '<div style="flex:1;min-width:0">' +
+              '<div style="font-weight:700;font-size:13px">' +
+              esc(c.title || '未知') +
+              '</div>' +
+              '<div style="font-size:11px;color:var(--muted)">' +
+              esc(c.authors || '') +
+              (c.isbn ? ' · ' + esc(c.isbn) : '') +
+              (c.match_score != null ? ' · ' + Math.round(c.match_score) : '') +
+              (c.in_library ? ' · 馆内' : '') +
+              (c.source ? ' · ' + esc(c.source) : '') +
+              '</div></div></div>'
+            );
+          })
+          .join('') +
+        '</div>';
+    } else if (open && !s.candidates.length) {
+      candsHtml =
+        '<p style="font-size:12px;color:var(--warn-text);margin:8px 0 0">暂无候选。请改上方书名后点「本条重搜」</p>';
+    }
+
+    return (
+      '<div class="spine-row' +
+      (miss ? ' miss' : '') +
+      '" id="spine-row-' +
+      i +
+      '">' +
+      '<div class="spine-top">' +
+      '<input type="checkbox" class="spine-pick" data-idx="' +
+      i +
+      '"' +
+      (canAdd ? ' checked' : ' disabled') +
+      ' style="width:18px;height:18px;margin-top:4px;flex-shrink:0">' +
+      (p ? coverImg(p.cover, 48, 64) : '<div style="width:48px;height:64px;border-radius:8px;background:var(--line);flex-shrink:0"></div>') +
+      '<div style="flex:1;min-width:0">' +
+      '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">书脊 ' +
+      (i + 1) +
+      (s.error ? ' · ' + esc(s.error) : '') +
+      '</div>' +
+      '<input class="spine-q-one" data-idx="' +
+      i +
+      '" type="text" value="' +
+      qVal +
+      '" placeholder="书名关键词" style="margin:0 0 6px;padding:8px 10px;font-size:13px">' +
+      (p
+        ? '<div style="font-weight:700;font-size:14px">' +
+          esc(p.title || '未知') +
+          '</div>' +
+          '<div style="font-size:12px;color:var(--muted)">' +
+          esc(p.authors || '') +
+          '</div>' +
+          (p.isbn
+            ? '<div style="font-size:11px;color:var(--muted)">ISBN ' + esc(p.isbn) + '</div>'
+            : '') +
+          '<div style="margin-top:2px">' +
+          spineBadge(p) +
+          ' ' +
+          score +
+          '</div>'
+        : '<div style="font-size:13px;color:var(--warn-text);font-weight:600">未匹配到书目</div>' +
+          '<div style="font-size:11px;color:var(--muted)">可改书名重搜，或展开候选/手输 ISBN</div>') +
+      '</div></div>' +
+      '<div class="spine-actions">' +
+      '<button type="button" class="pri" onclick="spineRescanOne(' +
+      i +
+      ')">本条重搜</button>' +
+      '<button type="button" onclick="spineToggleCands(' +
+      i +
+      ')">' +
+      (open ? '收起版本' : '选择版本(' + s.candidates.length + ')') +
+      '</button>' +
+      (canAdd
+        ? '<button type="button" onclick="spineAddOne(' + i + ')">单本入库</button>'
+        : '') +
+      '<button type="button" onclick="spineManualIsbn(' +
+      i +
+      ')">手输ISBN</button>' +
+      '</div>' +
+      candsHtml +
+      '</div>'
+    );
+  }
+
+  function paintSpineDlg() {
+    const box = document.getElementById('spine-list');
+    if (!box || !spineRows) return;
+    box.innerHTML = spineRows.map((s, i) => renderSpineRow(s, i)).join('');
+  }
+
+  function showSpineResults(data) {
+    spineRemote = data.remote || [];
+    spineLastMeta = data;
+    spineRows = Array.isArray(data.spines) && data.spines.length ? data.spines.map((s) => ({ ...s })) : null;
+    if (spineRows) {
+      spineRows.forEach((s) => {
+        s.candidates = spineMergeCands(s);
+        // 无自动 pick 时展开候选；有 pick 且唯一高分则收起
+        s.openCands = !s.pick || (s.candidates.length > 1 && (s.pick.match_score || 0) < 70);
+        const pi = s.candidates.findIndex(
+          (c) =>
+            s.pick &&
+            ((s.pick.isbn && c.isbn === s.pick.isbn) ||
+              (c.title === s.pick.title && (c.authors || '') === (s.pick.authors || '')))
+        );
+        // 有后端 pick 则对齐；无 pick 不默认选 candidates[0]（避免乱配）
+        if (pi >= 0) {
+          s.pickIndex = pi;
+          s.pick = s.candidates[pi];
+        } else if (s.pick) {
+          s.pickIndex = 0;
+        } else {
+          s.pickIndex = -1;
+        }
+      });
+    }
+
+    const engName = (e) => {
+      if (!e) return '';
+      if (e === 'aliyun') return '阿里OCR';
+      if (e === 'tesseract') return 'Tesseract';
+      if (e === 'paddle') return 'PaddleOCR';
+      return String(e);
+    };
+    const eng =
+      data.ocr && data.ocr.engine
+        ? engName(data.ocr.engine) +
+          (data.ocr.model || data.ocr.api ? '/' + (data.ocr.model || data.ocr.api) : '')
+        : '';
+    const rawPrev =
+      data.ocr && data.ocr.content_preview
+        ? esc(data.ocr.content_preview)
+        : data.ocr && data.ocr.raw
+          ? esc(String(data.ocr.raw).replace(/\s+/g, ' ').slice(0, 160))
+          : '';
+    const engCmp =
+      data.ocr && Array.isArray(data.ocr.engines) && data.ocr.engines.length
+        ? '<p style="font-size:11px;color:var(--muted);margin:0 0 8px">引擎对比：' +
+          data.ocr.engines
+            .map((x) => {
+              const n = engName(x.engine) + (x.model || x.api ? '/' + (x.model || x.api) : '');
+              return (
+                n +
+                (x.ok ? '✓' : '✗') +
+                (x.best ? '(' + esc(String(x.best).slice(0, 16)) + ')' : '') +
+                (x.score != null ? ' s' + Math.round(x.score) : '')
+              );
+            })
+            .join(' · ') +
+          '</p>'
+        : '';
+    const ocrLine =
+      data.ocr && (data.ocr.best || data.ocr.error || (data.ocr.spines && data.ocr.spines.length) || rawPrev)
+        ? '<p style="font-size:12px;color:var(--muted);margin:0 0 6px">' +
+          (eng ? '[' + esc(eng) + '] ' : '') +
+          (data.ocr.spines && data.ocr.spines.length
+            ? '识别 ' + data.ocr.spines.length + ' 条：' + esc(data.ocr.spines.slice(0, 8).join(' · '))
+            : data.ocr.best
+              ? 'OCR：' + esc(data.ocr.best)
+              : '失败：' + esc(data.ocr.error || '无有效书名')) +
+          '</p>' +
+          engCmp +
+          (rawPrev
+            ? '<p style="font-size:11px;color:var(--muted);margin:0 0 8px;word-break:break-all">原文：' +
+              rawPrev +
+              '</p>'
+            : '')
+        : '';
+    const msg = data.message
+      ? '<p style="color:var(--warn-text);font-size:13px;margin:0 0 8px">' + esc(data.message) + '</p>'
+      : '';
+
+    if (spineRows && spineRows.length) {
+      const q0 = esc((data.queries || []).join('，') || data.query || '');
+      openDlg(
+        '<div style="max-height:75vh;overflow:auto">' +
+          '<p style="font-weight:700;margin:0 0 6px">书脊识书</p>' +
+          ocrLine +
+          msg +
+          '<label style="font-size:12px;color:var(--muted)">全部重搜（逗号分隔）</label>' +
+          '<input id="spine-q" type="text" value="' +
+          q0 +
+          '" style="margin-bottom:8px">' +
+          '<div style="display:flex;gap:8px;margin-bottom:10px">' +
+          '<button type="button" class="btn btn-main" style="flex:1;padding:10px;font-size:13px;margin:0" onclick="rescanSpineTitle()">全部重搜</button>' +
+          '<button type="button" class="btn" style="flex:1;padding:10px;font-size:13px;margin:0;background:var(--surface);border:1px solid var(--line)" onclick="spineSelectAll(true)">全选可入库</button>' +
+          '</div>' +
+          '<div id="spine-list"></div>' +
+          '<p style="font-size:11px;color:var(--muted);margin:10px 0 0">未匹配：改本条书名→本条重搜；多版本点「选择版本」；也可手输 ISBN</p>' +
+          '</div>',
+        '入库所选',
+        addSpinePicks
+      );
+      paintSpineDlg();
+      return;
+    }
+
+    const q0 = esc(data.query || '');
+    openDlg(
+      '<div>' +
+        '<p style="font-weight:700;margin:0 0 6px">书脊识书</p>' +
+        ocrLine +
+        msg +
+        '<label style="font-size:12px;color:var(--muted)">检索词（可改后重搜）</label>' +
+        '<input id="spine-q" type="text" value="' +
+        q0 +
+        '" style="margin-bottom:8px">' +
+        '<button type="button" class="btn btn-main" style="margin-bottom:12px;padding:10px;font-size:14px" onclick="rescanSpineTitle()">按书名重搜</button>' +
+        '<p style="font-size:13px;font-weight:600;margin:0 0 6px">本馆匹配 (' +
+        (data.local || []).length +
+        ')</p>' +
+        spineCandidateHtml(data.local || [], 'local') +
+        '<p style="font-size:13px;font-weight:600;margin:12px 0 6px">外网候选 (' +
+        spineRemote.length +
+        ')</p>' +
+        spineCandidateHtml(spineRemote, 'remote') +
+        '<p style="font-size:11px;color:var(--muted);margin:10px 0 0">点外网候选（有 ISBN 且未入库）→ 走确认入库</p>' +
+        '</div>'
+    );
+  }
+
+  window.spineSelectAll = function (on) {
+    document.querySelectorAll('.spine-pick:not(:disabled)').forEach((el) => {
+      el.checked = !!on;
+    });
+  };
+
+  window.spineToggleCands = function (idx) {
+    if (!spineRows || !spineRows[idx]) return;
+    // 同步输入框
+    const inp = document.querySelector('.spine-q-one[data-idx="' + idx + '"]');
+    if (inp) spineRows[idx].query = String(inp.value || '').trim() || spineRows[idx].query;
+    spineRows[idx].openCands = !spineRows[idx].openCands;
+    paintSpineDlg();
+  };
+
+  window.spineChooseCand = function (idx, ci) {
+    if (!spineRows || !spineRows[idx]) return;
+    const s = spineRows[idx];
+    if (!s.candidates || !s.candidates[ci]) return;
+    s.pickIndex = ci;
+    s.pick = s.candidates[ci];
+    s.openCands = false;
+    paintSpineDlg();
+    toast('已选：' + (s.pick.title || ''));
+  };
+
+  window.spineRescanOne = async function (idx) {
+    if (!needLib() || !spineRows || !spineRows[idx]) return;
+    const inp = document.querySelector('.spine-q-one[data-idx="' + idx + '"]');
+    const q = String((inp && inp.value) || spineRows[idx].query || '').trim();
+    if (q.length < 2) return toast('请输入至少2个字', true);
+    spineRows[idx].query = q;
+    st('重搜书脊 ' + (idx + 1) + '…');
+    L('spine one rescan #' + (idx + 1) + ' ' + q);
+    try {
+      const data = await api('/books/title-search', {
+        method: 'POST',
+        body: JSON.stringify({ library_id: libId, query: q }),
+      });
+      const remote = data.remote || [];
+      const local = data.local || [];
+      // 与后端 searchOneSpineQuery 一致：直接用 data.pick，不再前端另算
+      const pick = data.pick || null;
+
+      spineRows[idx].query = q;
+      spineRows[idx].remote = remote;
+      spineRows[idx].local = local;
+      spineRows[idx].pick = pick;
+      spineRows[idx].miss_reason = data.miss_reason || null;
+      spineRows[idx].error = null;
+      spineRows[idx].candidates = spineMergeCands(spineRows[idx]);
+      spineRows[idx].openCands = !pick || spineRows[idx].candidates.length > 1;
+      const pi = spineRows[idx].candidates.findIndex(
+        (c) =>
+          pick &&
+          ((pick.isbn && c.isbn === pick.isbn) ||
+            (c.title === pick.title && (c.authors || '') === (pick.authors || '')))
+      );
+      if (pi >= 0) {
+        spineRows[idx].pickIndex = pi;
+        spineRows[idx].pick = spineRows[idx].candidates[pi];
+      } else if (pick) {
+        spineRows[idx].pickIndex = 0;
+        spineRows[idx].pick = pick;
+      } else {
+        spineRows[idx].pickIndex = -1;
+        spineRows[idx].pick = null;
+      }
+      paintSpineDlg();
+      st(
+        pick ? '书脊' + (idx + 1) + ' 已匹配' : '书脊' + (idx + 1) + ' 未达匹配门槛，请选手动版本',
+        pick ? 'ok' : 'warn'
+      );
+      L(
+        'spine one done #' +
+          (idx + 1) +
+          ' remote=' +
+          remote.length +
+          ' local=' +
+          local.length +
+          ' pick=' +
+          (pick && pick.title) +
+          ' score=' +
+          (pick && pick.match_score)
+      );
+    } catch (e) {
+      toast(e.message || '重搜失败', true);
+      st('重搜失败', 'err');
+      L('spine one fail ' + (e && e.message));
+    }
+  };
+
+  window.spineAddOne = async function (idx) {
+    if (!needLib() || !spineRows || !spineRows[idx]) return;
+    const p = spineRows[idx].pick;
+    if (!p || !p.isbn) return toast('无 ISBN，请选手输或换版本', true);
+    if (p.in_library) return toast('馆内已有', true);
+    closeDlg();
+    await onCode(p.isbn);
+  };
+
+  window.spineManualIsbn = function (idx) {
+    if (!needLib()) return;
+    const v = prompt('输入 ISBN（10/13位）' + (idx != null ? ' · 书脊' + (idx + 1) : ''));
+    if (!v) return;
+    const code = isbn(v);
+    if (code.length < 8) return toast('ISBN 太短', true);
+    if (spineRows && spineRows[idx]) {
+      spineRows[idx].pick = {
+        title: spineRows[idx].query || code,
+        authors: '',
+        isbn: code,
+        in_library: false,
+        source_kind: 'manual',
+      };
+      spineRows[idx].candidates = spineMergeCands(spineRows[idx]);
+      spineRows[idx].pickIndex = 0;
+      spineRows[idx].openCands = false;
+      paintSpineDlg();
+      toast('已填 ISBN，可勾选入库');
+      return;
+    }
+    closeDlg();
+    onCode(code);
+  };
+
+  async function addSpinePicks() {
+    if (!needLib()) return;
+    // 同步所有输入框书名（不强制）
+    document.querySelectorAll('.spine-q-one').forEach((el) => {
+      const i = Number(el.getAttribute('data-idx'));
+      if (spineRows && spineRows[i]) spineRows[i].query = String(el.value || '').trim();
+    });
+    const boxes = [...document.querySelectorAll('.spine-pick:checked:not(:disabled)')];
+    if (!boxes.length) return toast('请勾选要入库的书（需有 ISBN）', true);
+    const isbns = [];
+    for (const el of boxes) {
+      const i = Number(el.getAttribute('data-idx'));
+      const row = spineRows && spineRows[i];
+      const p = row && row.pick;
+      if (p && p.isbn && !p.in_library) isbns.push(p.isbn);
+    }
+    const uniq = [...new Set(isbns.map((x) => isbn(x)).filter((c) => c.length >= 8))];
+    if (!uniq.length) return toast('所选无有效 ISBN，请选版本或手输', true);
+    st('入库 ' + uniq.length + ' 本…');
+    L('spine batch ' + uniq.join(','));
+    try {
+      const d = await api('/books/batch', {
+        method: 'POST',
+        body: JSON.stringify({ library_id: libId, isbns: uniq }),
+      });
+      toast('成功 ' + d.ok + '/' + d.total);
+      st('书脊入库 ' + d.ok + '/' + d.total, 'ok');
+      closeDlg();
+      loadLibs();
+    } catch (e) {
+      toast(e.message || '入库失败', true);
+      st('书脊入库失败', 'err');
+    }
+  }
+
+  window.pickSpineRemote = function (idx) {
+    const b = spineRemote[idx];
+    if (!b || !b.isbn) return toast('无 ISBN', true);
+    if (b.in_library) return toast('馆内已有', true);
+    closeDlg();
+    onCode(b.isbn);
+  };
+
+  window.rescanSpineTitle = async function () {
+    const el = document.getElementById('spine-q');
+    const q = el ? String(el.value || '').trim() : '';
+    if (q.length < 2) return toast('请输入书名', true);
+    if (!needLib()) return;
+    st('按书名检索…');
+    L('spine rescan ' + q);
+    try {
+      const data = await api('/books/spine-recognize', {
+        method: 'POST',
+        body: JSON.stringify({ library_id: libId, query: q, multi: true }),
+      });
+      if (data.trace) Ltrace(data.trace);
+      showSpineResults(data);
+      const n = (data.spines || []).length || (data.remote || []).length;
+      st(n ? '找到 ' + n + ' 条' : '无结果', n ? 'ok' : 'warn');
+    } catch (e) {
+      toast(e.message, true);
+      st('检索失败', 'err');
+      L('rescan fail ' + (e && e.message));
+      if (e && e.data && e.data.trace) Ltrace(e.data.trace);
+    }
+  };
+
+  async function runSpineRecognize(imageDataUrl, query) {
+    if (!needLib()) return;
+    st('书脊识别中（可多本）…');
+    toast('识别书脊…');
+    L('spine start ' + (query ? 'text:' + query : 'image'));
+    try {
+      const body = { library_id: libId, multi: true };
+      if (imageDataUrl) body.image = imageDataUrl;
+      if (query) body.query = query;
+      const data = await api('/books/spine-recognize', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      if (data.trace) Ltrace(data.trace);
+      if (data.ocr) {
+        L(
+          'ocr engine=' +
+            (data.ocr.engine || '?') +
+            ' spines=' +
+            ((data.ocr.spines || []).length) +
+            ' best=' +
+            (data.ocr.best || '-') +
+            (data.ocr.error ? ' err=' + data.ocr.error : '')
+        );
+        if (data.ocr.content_preview) L('ocr raw: ' + data.ocr.content_preview);
+      }
+      showSpineResults(data);
+      const sn = (data.spines || []).length;
+      const matched = (data.spines || []).filter((s) => s.pick).length;
+      st(
+        sn
+          ? '书脊 ' + sn + ' 根，匹配 ' + matched
+          : data.message || '未匹配到书',
+        matched ? 'ok' : 'warn'
+      );
+      L('spine done matched=' + matched + '/' + sn);
+    } catch (e) {
+      st('书脊识别失败', 'err');
+      toast(e.message || '失败', true);
+      L('spine fail ' + (e && e.message));
+      if (e && e.data && e.data.trace) Ltrace(e.data.trace);
+    }
+  }
+
+  async function fromSpineFile(ev) {
+    const f = ev.target.files && ev.target.files[0];
+    ev.target.value = '';
+    if (!f) return;
+    if (!needLib()) return;
+    await stop();
+    try {
+      st('压缩书脊图…');
+      const dataUrl = await fileToJpegDataUrl(f, 1600, 0.88);
+      L('spine file ' + f.name + ' → ' + Math.round((dataUrl.length * 0.75) / 1024) + 'KB');
+      await runSpineRecognize(dataUrl, null);
+    } catch (e) {
+      st('书脊图处理失败', 'err');
+      toast(e.message || '失败', true);
+    }
+  }
+
+  function manualSpineTitle() {
+    if (!needLib()) return;
+    const v = prompt('输入书名关键词（至少2字）');
+    if (!v || String(v).trim().length < 2) return;
+    runSpineRecognize(null, String(v).trim());
+  }
+
   async function fromFilesBatch(ev) {
     const files = ev.target.files ? [...ev.target.files] : [];
     ev.target.value = '';
@@ -3014,7 +3753,7 @@
   function showTab(n) {
     // 账号页(3)所有人可进改密；用户管理仅 admin 可见区块
     if (isViewer() && (n === 0 || n === 2 || n === 4)) n = 1;
-    if (!isAdmin() && (n === 5 || n === 6)) n = 1;
+    if (!isAdmin() && (n === 5 || n === 6 || n === 7)) n = 1;
     document.getElementById('p0').classList.toggle('hide', n !== 0);
     document.getElementById('p1').classList.toggle('hide', n !== 1);
     document.getElementById('p2').classList.toggle('hide', n !== 2);
@@ -3024,6 +3763,8 @@
     if (p5) p5.classList.toggle('hide', n !== 5);
     const p6 = document.getElementById('p6');
     if (p6) p6.classList.toggle('hide', n !== 6);
+    const p7 = document.getElementById('p7');
+    if (p7) p7.classList.toggle('hide', n !== 7);
     document.getElementById('t0').classList.toggle('on', n === 0);
     document.getElementById('t1').classList.toggle('on', n === 1);
     document.getElementById('t2').classList.toggle('on', n === 2);
@@ -3033,6 +3774,8 @@
     if (t5b) t5b.classList.toggle('on', n === 5);
     const t6b = document.getElementById('t6');
     if (t6b) t6b.classList.toggle('on', n === 6);
+    const t7b = document.getElementById('t7');
+    if (t7b) t7b.classList.toggle('on', n === 7);
     if (n === 1) search();
     if (n === 2) {
       loadGroups();
@@ -3042,6 +3785,7 @@
     if (n === 4) loadGroups();
     if (n === 5) loadAuditLogs(1);
     if (n === 6) loadScrapeRuns();
+    if (n === 7) loadMatchRuns();
     if (n !== 0) stop();
   }
 
@@ -3343,6 +4087,149 @@
     }
   }
 
+  let matchLogRunId = '';
+
+  function fmtMatchRow(r) {
+    const t = String(r.created_at || '').replace('T', ' ').slice(0, 19);
+    const ok =
+      r.ok == null ? '' : r.ok == 1 || r.ok === true ? ' OK' : ' FAIL';
+    let body = '';
+    try {
+      if (r.request_json) body += '\n  req: ' + String(r.request_json).slice(0, 500);
+    } catch (_) {}
+    try {
+      if (r.response_json) body += '\n  resp: ' + String(r.response_json).slice(0, 800);
+    } catch (_) {}
+    try {
+      if (r.hits_json) body += '\n  hits: ' + String(r.hits_json).slice(0, 600);
+    } catch (_) {}
+    try {
+      if (r.pick_json) body += '\n  pick: ' + String(r.pick_json).slice(0, 400);
+    } catch (_) {}
+    return (
+      '[' +
+      t +
+      '] +' +
+      (r.elapsed_ms || 0) +
+      'ms ' +
+      (r.event || '') +
+      ok +
+      (r.site ? ' @' + r.site : '') +
+      (r.query_text ? ' q=' + r.query_text : '') +
+      (r.reason ? '\n  reason: ' + r.reason : '') +
+      (r.summary ? '\n  ' + r.summary : '') +
+      body
+    );
+  }
+
+  async function openMatchRun(runId) {
+    if (!isAdmin() || !runId) return;
+    matchLogRunId = runId;
+    const box = document.getElementById('match-log-box');
+    const meta = document.getElementById('match-log-meta');
+    if (!box) return;
+    box.textContent = '加载批次 ' + runId.slice(0, 8) + '…';
+    try {
+      const d = await api(
+        '/match-logs?run_id=' + encodeURIComponent(runId) + '&page=1&page_size=200'
+      );
+      const logs = d.logs || [];
+      if (meta) {
+        meta.textContent =
+          '批次 ' + runId.slice(0, 10) + ' · ' + logs.length + ' 条（时间正序）';
+      }
+      if (!logs.length) {
+        box.textContent = '该批次无明细';
+        return;
+      }
+      box.textContent = logs.map(fmtMatchRow).join('\n\n');
+      box.scrollTop = 0;
+    } catch (e) {
+      box.textContent = e.message || String(e);
+    }
+  }
+
+  async function loadMatchRuns() {
+    if (!isAdmin()) return;
+    const box = document.getElementById('match-log-box');
+    const meta = document.getElementById('match-log-meta');
+    const list = document.getElementById('match-run-list');
+    if (!box) return;
+    if (list) list.innerHTML = '<div class="muted">加载匹配批次…</div>';
+    box.textContent = '点上方批次查看：调了哪家、返回什么、为何未命中';
+    const q =
+      (document.getElementById('match-log-q') &&
+        document.getElementById('match-log-q').value.trim()) ||
+      '';
+    try {
+      const d = await api(
+        '/match-logs/runs?limit=30' + (q ? '&q=' + encodeURIComponent(q) : '')
+      );
+      const runs = d.runs || [];
+      if (meta) meta.textContent = '最近匹配批次 ' + runs.length + '（最新在上）';
+      if (!list) return;
+      if (!runs.length) {
+        list.innerHTML =
+          '<div class="muted">暂无记录。请先在扫描页「拍书脊」或「书名搜书」。</div>';
+        return;
+      }
+      list.innerHTML = '';
+      runs.forEach((r) => {
+        const t = String(r.last_at || r.first_at || '').replace('T', ' ').slice(0, 19);
+        const hit = Number(r.hit_events || 0);
+        const miss = Number(r.miss_events || 0);
+        const div = document.createElement('div');
+        div.className = 'card';
+        div.style.cursor = 'pointer';
+        div.style.flexDirection = 'column';
+        div.style.gap = '4px';
+        div.innerHTML =
+          '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--muted)">' +
+          '<span>' +
+          esc(t) +
+          '</span><span>' +
+          (hit ? '<span style="color:var(--ok-text)">命中' + hit + '</span> ' : '') +
+          (miss ? '<span style="color:var(--warn-text)">未命中' + miss + '</span>' : '') +
+          '</span></div>' +
+          '<div style="font-size:13px;font-weight:600">' +
+          esc(r.sample_query || r.end_summary || '(无查询词)') +
+          '</div>' +
+          '<div style="font-size:12px;color:var(--muted)">' +
+          esc(r.username || '-') +
+          ' · ' +
+          (r.events || 0) +
+          ' 事件 · run ' +
+          esc(String(r.run_id || '').slice(0, 10)) +
+          '</div>' +
+          (r.end_summary
+            ? '<div style="font-size:11px;color:var(--muted)">' + esc(r.end_summary) + '</div>'
+            : '');
+        div.onclick = () => openMatchRun(r.run_id);
+        list.appendChild(div);
+      });
+      if (matchLogRunId) openMatchRun(matchLogRunId);
+    } catch (e) {
+      if (list) list.innerHTML = '<div class="muted" style="color:red">' + esc(e.message) + '</div>';
+      box.textContent = e.message || String(e);
+    }
+  }
+
+  async function clearMatchLogs() {
+    if (!isAdmin()) return;
+    if (!confirm('清除 7 天前的匹配诊断日志？')) return;
+    try {
+      const d = await api('/match-logs', {
+        method: 'DELETE',
+        body: JSON.stringify({ days: 7 }),
+      });
+      toast('已删 ' + (d.deleted || 0) + ' 条');
+      matchLogRunId = '';
+      loadMatchRuns();
+    } catch (e) {
+      toast(e.message || '清除失败', true);
+    }
+  }
+
   async function boot() {
     applyTheme(currentThemeId());
     L('boot ' + location.href);
@@ -3375,6 +4262,9 @@
   window.deleteBook = deleteBook;
   window.createLib = createLib;
   window.loadAuditLogs = loadAuditLogs;
+  window.loadMatchRuns = loadMatchRuns;
+  window.openMatchRun = openMatchRun;
+  window.clearMatchLogs = clearMatchLogs;
   window.loadScrapeLogs = loadScrapeLogs;
   window.loadScrapeLogsRaw = loadScrapeLogsRaw;
   window.loadScrapeRuns = loadScrapeRuns;
@@ -3392,6 +4282,9 @@
   window.changeMyPassword = changeMyPassword;
   window.createUser = createUser;
   window.fromFilesBatch = fromFilesBatch;
+  window.fromSpineFile = fromSpineFile;
+  window.manualSpineTitle = manualSpineTitle;
+  window.addSpinePicks = addSpinePicks;
   window.createGroup = createGroup;
   window.renameGroup = renameGroup;
   window.renameLib = renameLib;

@@ -351,7 +351,40 @@ async function initDb() {
     } catch (e) {
       console.error('[initDb] scrape_logs table:', e.message || e);
     }
-    // 新用户默认无群组，由管理员分配；公开馆对所有登录用户可见
+
+    // 书脊/书名匹配诊断（谁调了哪家接口、返回什么、为何未命中）
+    try {
+      await conn.query(`
+        CREATE TABLE IF NOT EXISTS match_logs (
+          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+          run_id VARCHAR(36) NOT NULL,
+          user_id BIGINT UNSIGNED NULL,
+          username VARCHAR(64) NULL,
+          library_id BIGINT UNSIGNED NULL,
+          query_text VARCHAR(256) NULL,
+          event VARCHAR(64) NOT NULL,
+          site VARCHAR(64) NULL,
+          ok TINYINT(1) NULL,
+          http_status INT NULL,
+          request_json MEDIUMTEXT NULL,
+          response_json MEDIUMTEXT NULL,
+          hits_json MEDIUMTEXT NULL,
+          pick_json TEXT NULL,
+          reason VARCHAR(1024) NULL,
+          elapsed_ms INT NULL,
+          summary VARCHAR(512) NULL,
+          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          KEY idx_match_run (run_id),
+          KEY idx_match_created (created_at),
+          KEY idx_match_event (event),
+          KEY idx_match_site (site),
+          KEY idx_match_query (query_text),
+          KEY idx_match_user (user_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+    } catch (e) {
+      console.error('[initDb] match_logs table:', e.message || e);
+    }
   } finally {
     conn.release();
   }
